@@ -22,6 +22,28 @@ struct CompanionChecks {
         try require(values[1].message == "No connected phone", "Error did not decode")
         print("PASS: split UTF-8 and batched status events")
 
+        for running in [false, true] {
+            for connected in [false, true] {
+                for enabled in [false, true] {
+                    let menu = CompanionMenuState(running: running, connected: connected,
+                        clipboardEnabled: enabled, phoneName: "Phone 🌉")
+                    try require(menu.canSendClipboard == (running && connected && enabled),
+                        "Clipboard action must require running, connected and permitted")
+                    try require(menu.status == (!running ? "Companion Stopped" :
+                        (!connected ? "No Phone Connected" : "Connected to Phone 🌉")),
+                        "Menu connection status is incorrect")
+                }
+            }
+        }
+        let longName = CompanionMenuState(running: true, connected: true, clipboardEnabled: true,
+            phoneName: String(repeating: "🌉", count: 200) + "\n\t")
+        try require(longName.status.count <= 50 && longName.status.hasSuffix("…"),
+            "Long phone names must not expand the menu without bound")
+        let blankName = CompanionMenuState(running: true, connected: true, clipboardEnabled: true,
+            phoneName: "\n\t")
+        try require(blankName.status == "Connected to Android Phone", "Empty names need a readable fallback")
+        print("PASS: compact menu status, Unicode and action availability")
+
         var permission = EventBuffer()
         let fileState = try permission.append(Data("{\"event\":\"state\",\"filesEnabled\":true}\n".utf8))
         try require(fileState.first?.filesEnabled == true, "File receiving permission did not decode")

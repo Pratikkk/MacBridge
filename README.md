@@ -50,7 +50,7 @@ The native UI still uses the tested Python TLS engine. Native Swift transport, M
 
 ## Pair by QR
 
-On Mac, click the menu-bar link icon and expand **Pair a phone**. On Android, open **Devices → Pair a Mac → Scan QR**, point the camera at the Mac code, review the Mac name, address and public-key fingerprint, then tap **Verify Identity & Pair**. Scanning stages the code; pairing happens only after your tap.
+On Mac, click the menu-bar link icon and choose **Pair a Phone…**. On Android, open **Devices → Pair a Mac → Scan QR**, point the camera at the Mac code, review the Mac name, address and public-key fingerprint, then tap **Verify Identity & Pair**. Scanning stages the code; pairing happens only after your tap.
 
 The scanner uses [Google Code Scanner](https://developers.google.com/ml-kit/vision/barcode-scanning/code-scanner) through Google Play services, without MacBridge requesting camera permission. First use may need internet to download the scanner module. If services or camera access are unavailable, paste the Mac code instead. Cancelling or scanning another type of QR leaves any previously entered code unchanged. Generate a fresh Mac code if the five-minute window expired or the code was already used.
 
@@ -77,4 +77,4 @@ Cancellation, disconnect, permission revocation and shutdown remove unverified M
 
 File tests cover normal multi-chunk and empty transfers, Unicode names, checksum rejection, ordering and malformed chunks, oversized documents (including unknown sizes), unrelated-peer acknowledgements, revoked document access, disabled sharing, timeouts, disconnects, cancellation, duplicate names, disk-space rejection and shutdown/restart cleanup. The Android-to-Python integration test verifies actual TLS delivery and cancellation against an isolated receive folder.
 
-The Android and Mac interfaces share a monochrome palette, rounded panels and clear primary actions. Android Share uses a two-option Clipboard/Files selector. The Mac companion groups connection status, Clipboard, Files and device pairing into separate panels; pairing codes expand on demand. Decorative blur stays behind the connection panel, leaving text, QR codes and controls sharp. The Mac window scrolls on smaller displays, and Android recovery actions remain reachable with enlarged text.
+The Android interface uses monochrome panels and a two-option Clipboard/Files selector. The Mac companion follows the native menu-bar pattern: a compact system menu with connection status, clipboard sending, the received-files folder and sharing checkmarks. Pairing, device management and detailed status open in a separate settings window. The menu follows macOS appearance and keyboard navigation, and daily actions require no scrolling. Android recovery actions remain reachable with enlarged text.

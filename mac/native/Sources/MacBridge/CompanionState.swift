@@ -49,3 +49,21 @@ enum CompanionEventStream {
         }
     }
 }
+
+// Keep menu labels bounded, and availability aligned with the real engine state.
+enum CompanionSettingsTab: Hashable { case pairing, devices, status }
+
+struct CompanionMenuState {
+    let running: Bool
+    let connected: Bool
+    let clipboardEnabled: Bool
+    let phoneName: String
+    var canSendClipboard: Bool { running && connected && clipboardEnabled }
+    var status: String {
+        guard running else { return "Companion Stopped" }
+        guard connected else { return "No Phone Connected" }
+        let name = phoneName.filter { !$0.isNewline && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }
+        let label = name.isEmpty ? "Android Phone" : String(name.prefix(36)) + (name.count > 36 ? "…" : "")
+        return "Connected to \(label)"
+    }
+}
