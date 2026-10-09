@@ -42,7 +42,7 @@ fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: ()
         ScreenTitle("Settings", "Your connection, your choices.")
         Panel {
             Text("Sharing permissions", style = MaterialTheme.typography.titleLarge)
-            Text("Choose which Macs can exchange clipboard text. New pairings start with sharing off.", color = Slate400)
+            Text("Choose which Macs can exchange clipboard text and files. New pairings start with sharing off.", color = Slate400)
             OutlinedButton(onClick = onDevices, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Manage devices") }
         }
         Panel {
@@ -58,7 +58,7 @@ fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: ()
         Text("On the roadmap", style = MaterialTheme.typography.titleLarge)
         Panel {
             Text("File sharing · Available in Share", style = MaterialTheme.typography.titleMedium)
-            Text("Send phone documents to your Mac with verified delivery.", color = Slate400)
+            Text("Exchange files with your Mac, verify delivery and save received documents.", color = Slate400)
             HorizontalDivider(color = Slate800)
             Text("Notification mirroring · Coming later", style = MaterialTheme.typography.titleMedium)
             Text("View and manage phone notifications on your Mac.", color = Slate400)

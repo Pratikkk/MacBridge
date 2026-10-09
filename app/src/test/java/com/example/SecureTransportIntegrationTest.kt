@@ -48,14 +48,31 @@ class SecureTransportIntegrationTest {
     }
 
     private lateinit var peerDirectory: File
-    private fun withMac(files: Boolean = false, test: (PairingCode) -> Unit) {
+    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
         val directory = Files.createTempDirectory("macbridge-integration-").toFile()
         peerDirectory = directory
-        val process = ProcessBuilder(listOf("python3", File(root, "mac/macbridge.py").absolutePath,
-            "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",
-            "--address", "127.0.0.1", "--headless", "--echo") + (if (files) listOf("--files") else emptyList())).redirectErrorStream(true).start()
+        val selected = File(directory, "🌉 source.bin").apply { if (sendsFile) writeBytes(ByteArray(80000) { (it % 256).toByte() }) }
+        val senderScript = """
+            import sys,threading,time
+            sys.path.insert(0,sys.argv[1])
+            from macbridge import Companion
+            peer=Companion(sys.argv[2],host='127.0.0.1',port=0)
+            print('PAIRING_URI='+peer.pairing_uri('127.0.0.1'),flush=True)
+            threading.Thread(target=peer.serve,daemon=True).start()
+            for _ in range(200):
+                if peer.active_stream is not None: break
+                time.sleep(.05)
+            peer.start_file(sys.argv[3],peer.connection_id)
+            peer.sender.finished.wait(20)
+            while True: time.sleep(1)
+        """.trimIndent()
+        val command = if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath)
+            else listOf("python3", File(root, "mac/macbridge.py").absolutePath,
+                "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",
+                "--address", "127.0.0.1", "--headless", "--echo") + (if (files) listOf("--files") else emptyList())
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
         val executor = Executors.newSingleThreadExecutor()
         try {
             val line = executor.submit<String> { process.inputStream.bufferedReader().readLine() ?: error("Mac companion exited before startup") }
@@ -144,6 +161,41 @@ class SecureTransportIntegrationTest {
             assertEquals("CANCELLED", withTimeout(5000) { acknowledgements.receive() }.status)
             assertEquals(1, folder.listFiles()!!.size)
         } } finally { transport.stop(); scope.cancel() }
+    }
+
+    @Test
+    fun `real Mac sender delivers verified private file to Android over TLS`() = withMac(sendsFile = true) { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val history = TestFileHistory()
+        val complete = CompletableDeferred<ProtocolMessage.FileAck>()
+        lateinit var receiver: com.example.manager.FileReceivingManager
+        lateinit var transport: SecureTransport
+        suspend fun target(): com.example.manager.FileTransferTarget? {
+            val state = transport.connectionState.value as? ConnectionState.Connected ?: return null
+            return com.example.manager.FileTransferTarget(state.device.copy(allowFileTransfer = true), state.connectedSince)
+        }
+        transport = SecureTransport(IdentityManager(context, true), scope, { message, _ ->
+            target()?.let { receiver.process(message, it) }
+        }, {})
+        receiver = com.example.manager.FileReceivingManager(context, history, scope, { target() }, { message, _ ->
+            val sent = transport.sendMessage(message)
+            if (message is ProtocolMessage.FileAck && message.status == "COMPLETED") complete.complete(message)
+            sent
+        })
+        try { runBlocking(Dispatchers.IO) {
+            transport.pairDevice(code.device, code.secret) {}
+            val ack = withTimeout(10000) { complete.await() }
+            assertEquals(80000, ack.receivedBytes)
+            val item = history.values.values.single()
+            assertEquals(com.example.model.TransferStatus.COMPLETED, item.status)
+            assertEquals(item.sha256Checksum, ack.sha256Checksum)
+            assertArrayEquals(ByteArray(80000) { (it % 256).toByte() }, File(item.filePath!!).readBytes())
+        } } finally {
+            transport.stop()
+            runBlocking { scope.coroutineContext[Job]!!.cancelAndJoin() }
+            File(context.filesDir, "received_files").deleteRecursively()
+        }
     }
 
     @Test

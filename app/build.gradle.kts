@@ -83,6 +83,7 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // The TLS integration tests execute this peer outside the JVM. Track it so a
 // Python engine change cannot reuse stale Android test results from Gradle's cache.
 tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+  inputs.file(rootProject.file("mac/file_sender.py")).withPropertyName("macBridgeFileSender")
   inputs.file(rootProject.file("mac/file_receiver.py")).withPropertyName("macBridgeFileReceiver")
   inputs.file(rootProject.file("mac/macbridge.py")).withPropertyName("macBridgeTestPeer")
 }

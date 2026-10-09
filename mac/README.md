@@ -1,6 +1,6 @@
 # MacBridge development companion
 
-MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, and phone revocation. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport, Bonjour advertising, Mac-to-phone files, transfer resume, and notification mirroring remain future steps.
+MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, and phone revocation. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport, Bonjour advertising, transfer resume, and notification mirroring remain future steps.
 
 ## Native Mac app
 
@@ -13,7 +13,7 @@ open mac/native/dist/MacBridge.app
 
 Requires macOS 13+, the Swift command-line tools to build, and Python 3/OpenSSL on the Mac to run this development version. The build uses no downloaded Swift packages. The app bundle lives at `mac/native/dist/MacBridge.app`; it is signed locally for development and is not notarized for distribution.
 
-Click the **link icon in the menu bar**. The app has no Dock icon. Its native system menu shows connection status, **Send Clipboard to Phone**, **Show Received Files**, and checkmarked **Allow Clipboard Sharing** / **Allow File Receiving** controls. All daily actions fit in the menu without scrolling. Choose **Pair a Phone…** to open the QR code in a separate settings window, **Manage Devices…** to manage paired phones, or **Settings…** for the local address, detailed status and **Restart Companion**. The menu and settings window follow the system appearance; the Mac no longer uses the Android-style dark dashboard. On Android open **Devices → Pair a Mac → Scan QR** and scan this code, or paste the pairing code. Review the displayed Mac identity and tap **Verify Identity & Pair**. Scanning requires Google Play services; first use may need internet to download the scanner module. Paste remains available if scanning fails. Codes expire after five minutes and are invalidated after successful pairing. **Generate New Code** refreshes the code and local address.
+Click the **link icon in the menu bar**. The app has no Dock icon. Its native system menu shows connection status, **Send Clipboard to Phone**, **Send File to Phone…**, **Show Received Files**, and checkmarked **Allow Clipboard Sharing** / **Allow File Receiving** controls. All daily actions fit in the menu without scrolling. Choose **Pair a Phone…** to open the QR code in a separate settings window, **Manage Devices…** to manage paired phones, or **Settings…** for the local address, detailed status and **Restart Companion**. The menu and settings window follow the system appearance; the Mac no longer uses the Android-style dark dashboard. On Android open **Devices → Pair a Mac → Scan QR** and scan this code, or paste the pairing code. Review the displayed Mac identity and tap **Verify Identity & Pair**. Scanning requires Google Play services; first use may need internet to download the scanner module. Paste remains available if scanning fails. Codes expire after five minutes and are invalidated after successful pairing. **Generate New Code** refreshes the code and local address.
 
 Clipboard sharing starts enabled for compatibility with the working CLI and can be paused in the app. The sharing choices are saved across app restarts. Sending requires an authenticated connected phone. **Manage Devices… → Forget…** revokes the phone on the Mac and requires confirmation. **Quit MacBridge** stops the app's child server; **Restart Companion** restarts it without changing the identity.
 
@@ -51,7 +51,7 @@ Android production identity fails closed when Keystore is unavailable. An explic
 
 The development Mac identity and phone pins live in `~/Library/Application Support/MacBridgeDev`, using owner-only directory and file permissions. The Mac private key is currently an unencrypted file, not a Keychain key. Back up these files securely if you need to preserve the development identity. The self-signed certificate expires after one year; there is no automatic certificate renewal yet. Do not delete or rotate an identity casually: existing pins will no longer match.
 
-The Security screen lists implementation status and pending controls; it is not an independent security audit. Mac-to-phone files, notification actions, inherited Firebase initialization, and broader abuse resistance remain unfinished.
+The Security screen lists implementation status and pending controls; it is not an independent security audit. Notification actions, inherited Firebase initialization, and broader abuse resistance remain unfinished.
 
 ## Validate
 
@@ -79,8 +79,16 @@ Enable **Allow File Receiving** in the native menu-bar app; it defaults off and 
 
 Verified files are saved under the companion state directory in `ReceivedFiles` (normally `~/Library/Application Support/MacBridgeDev/ReceivedFiles`). **Show Received Files** opens the folder. The directory is owner-only and files have mode 0600. Names are sanitized and receive a unique prefix to avoid overwriting an existing file. Files are never opened automatically.
 
-Each authenticated connection accepts one ordered transfer at a time, bounded to 64 KB chunks. Completion requires the announced size and SHA-256 checksum to match; the phone receives the checksum confirmation. Receiving permission revocation, cancellation, disconnect and graceful shutdown discard partial files. Startup removes interrupted `.incoming-*` files after a crash while preserving verified files. A receive attempt requires the file size plus 8 MB free space. Retry a failure by choosing the file again; resume and sending files from the Mac remain future work.
+Each authenticated connection accepts one ordered transfer at a time, bounded to 64 KB chunks. Completion requires the announced size and SHA-256 checksum to match; the phone receives the checksum confirmation. Receiving permission revocation, cancellation, disconnect and graceful shutdown discard partial files. Startup removes interrupted `.incoming-*` files after a crash while preserving verified files. A receive attempt requires the file size plus 8 MB free space. Retry a failure by choosing the file again; resume remains future work.
 
 Closing the settings window leaves the companion and its menu running. Reopen the app from Finder to return to settings. Paired-phone lists scroll only within the Devices settings tab when many phones are saved; the menu contains a fixed number of actions regardless of phone count. Long and Unicode phone names are bounded in the menu while device management keeps the full name. Stopped or disconnected companions keep unavailable actions visible and disabled.
 
 The menu design follows [Apple’s menu-bar Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/the-menu-bar), using the native [MenuBarExtra menu style](https://developer.apple.com/documentation/swiftui/menubarextrastyle/menu). QR codes and longer setup instructions belong in the settings window rather than the menu.
+
+## Send files to Android
+
+Enable **File sharing** for this Mac in Android Devices, connect, then choose **Send File to Phone…** from the Mac menu. Choose one regular file up to 100 MB. Mac receiving permission controls the opposite direction; it is not required for sending a deliberately selected file. The picker is tied to the current connection, so a changed phone or reconnected session requires selecting the file again. The CLI also supports `/send /absolute/path/to/file`; paths with spaces are accepted without shell quoting.
+
+The menu shows preparation/progress and delivery status, plus **Cancel File Sending**. Android confirms size and checksum before the Mac reports success. Open **Share → Files** on Android, then **Save As…** on the incoming verified file to choose a document destination. Cancelling Save As leaves the private verified copy in the app. A failure never automatically opens a document or retries to a different peer.
+
+Mac snapshots use an owner-only `OutgoingFiles` directory under the state directory and are deleted after each attempt. Startup removes interrupted `.outgoing-*` snapshots. Sending stops on disconnect, session replacement, revocation or shutdown. Phone receive permission failures and timeouts report a generic retry instruction without logging the selected path or file contents. Sending and receiving can run independently, with one active transfer in each direction.

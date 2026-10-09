@@ -23,6 +23,7 @@ import com.example.ui.screens.clipboard.ClipboardWorkspace
 import com.example.ui.screens.devices.PairedDeviceItemCard
 import com.example.ui.screens.settings.SettingsContent
 import com.example.ui.screens.files.FileSendCard
+import com.example.ui.screens.files.FileTransferCard
 import com.example.ui.screens.ShareTabs
 import com.example.ui.theme.MyApplicationTheme
 import org.junit.Assert.*
@@ -191,6 +192,20 @@ class ModernUiTest {
         compose.setContent { MyApplicationTheme { FileSendCard(true, busy, { selections++; busy = true }, {}) } }
         compose.onNodeWithTag("choose_file_button").performClick().assertIsNotEnabled()
         compose.runOnIdle { assertEquals(1, selections) }
+    }
+
+    @Test fun `Save As appears only for verified incoming files and disables while saving`() {
+        var item by mutableStateOf(FileTransferItem("incoming-file", "🌉 document.bin", 1,
+            direction = TransferDirection.INCOMING, status = TransferStatus.TRANSFERRING, sha256Checksum = "hash"))
+        var saving by mutableStateOf(false)
+        var saves = 0
+        compose.setContent { MyApplicationTheme { FileTransferCard(item, saving, { saves++; saving = true }, {}) } }
+        compose.onNodeWithTag("save_file_incoming-file").assertDoesNotExist()
+        compose.runOnIdle { item = item.copy(status = TransferStatus.COMPLETED, filePath = "/private-copy", calculatedChecksum = "wrong") }
+        compose.onNodeWithTag("save_file_incoming-file").assertDoesNotExist()
+        compose.runOnIdle { item = item.copy(calculatedChecksum = "hash") }
+        compose.onNodeWithTag("save_file_incoming-file").performClick().assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(1, saves) }
     }
 
     @Test fun `Share tabs remain selectable with large text on narrow screens`() {

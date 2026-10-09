@@ -13,6 +13,11 @@ struct CompanionEvent: Decodable {
     let peers: [PairedPhone]?
     let clipboardEnabled: Bool?
     let filesEnabled: Bool?
+    let connectionId: String?
+    let fileSending: Bool?
+    let fileSendStatus: String?
+    let sentBytes: Int64?
+    let fileSize: Int64?
     let endpoint: String?
     let pairingURI: String?
     let expiresAt: TimeInterval?

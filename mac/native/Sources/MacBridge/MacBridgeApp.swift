@@ -48,7 +48,19 @@ struct CompanionMenu: View {
         Divider()
         Button("Send Clipboard to Phone", action: controller.pushClipboard)
             .disabled(!state.canSendClipboard)
+        Button("Send File to Phone…", action: controller.sendFileToPhone)
+            .disabled(!controller.running || !controller.connected || controller.fileSending)
         Button("Show Received Files", action: controller.showReceivedFiles)
+        if controller.fileSending {
+            Text(controller.fileSize > 0 ? "Sending File: \(min(100, controller.sentBytes * 100 / controller.fileSize))%" : "Preparing File…")
+        } else if controller.fileSendStatus == "completed" {
+            Text("File Received and Verified by Phone")
+        } else if controller.fileSendStatus == "failed" {
+            Text("File Sending Failed — See Settings")
+        } else if controller.fileSendStatus == "cancelled" {
+            Text("File Sending Cancelled")
+        }
+        Button("Cancel File Sending", action: controller.cancelFileSend).disabled(!controller.fileSending)
         Divider()
         Toggle("Allow Clipboard Sharing", isOn: Binding(
             get: { controller.clipboardEnabled }, set: controller.setClipboard))

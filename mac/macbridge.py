@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 import uuid
 
 from file_receiver import FileReceiver
+from file_sender import FileSender
 
 MAX_FRAME = 1024 * 1024
 
@@ -108,6 +109,12 @@ class Companion:
         self.clipboard = clipboard
         self.files = files
         self.receivers = set()
+        self.sender = None
+        outgoing = self.directory / 'OutgoingFiles'
+        if outgoing.exists() and not outgoing.is_symlink():
+            for partial in outgoing.glob('.outgoing-*'):
+                if partial.is_file() or partial.is_symlink():
+                    partial.unlink()
         received = self.directory / 'ReceivedFiles'
         if received.exists() and not received.is_symlink():
             for partial in received.glob('.incoming-*'):
@@ -118,6 +125,7 @@ class Companion:
         self.active_socket = None
         self.active_stream = None
         self.active_id = None
+        self.connection_id = ""
         self.rotate_code()
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -157,7 +165,10 @@ class Companion:
                 connected=self.active_id is not None,
                 phoneName=self.peers.get(self.active_id, {}).get('name', 'Android Phone'),
                 peers=[dict(id=key, name=peer.get('name', 'Android Phone')) for key, peer in sorted(self.peers.items())],
-                clipboardEnabled=self.clipboard, filesEnabled=self.files, endpoint=f'{self.address}:{self.port}',
+                clipboardEnabled=self.clipboard, filesEnabled=self.files,
+                fileSendStatus=self.sender.result if self.sender else 'idle',
+                connectionId=self.connection_id, fileSending=self.sender.busy if self.sender else False,
+                sentBytes=self.sender.sent_bytes if self.sender else 0, fileSize=self.sender.file_size if self.sender else 0, endpoint=f'{self.address}:{self.port}',
                 pairingURI=self.pairing_uri(self.address) if self.address and self.secret and remaining > 0 else '',
                 expiresAt=time.time() + remaining, lastAction=self.last_action)
         self.event_sink(value)
@@ -166,6 +177,9 @@ class Companion:
         with self.lock:
             current = self.active_socket
             self.active_socket = self.active_stream = self.active_id = None
+            self.connection_id = ""
+            if self.sender:
+                self.sender.cancel()
             if current:
                 try:
                     current.shutdown(socket.SHUT_RDWR)
@@ -177,6 +191,15 @@ class Companion:
         action = command.get('action')
         if action == 'pushClipboard':
             self.push_clipboard()
+        elif action == 'sendFile':
+            path = command.get('path')
+            if not isinstance(path, str) or not path or len(path) > 4096:
+                raise ValueError('Choose a file to send')
+            self.start_file(path, command.get('connectionId'))
+        elif action == 'cancelFileSend':
+            with self.lock:
+                if self.sender:
+                    self.sender.cancel()
         elif action == 'reissueCode':
             address = command.get('address') or detect_address()
             ipaddress.IPv4Address(address)
@@ -282,7 +305,10 @@ class Companion:
                     previous = self.active_socket
                     if previous:
                         previous.shutdown(socket.SHUT_RDWR)
+                    if self.sender:
+                        self.sender.cancel()
                     self.active_socket, self.active_stream, self.active_id = secure, stream, peer_id
+                    self.connection_id = str(uuid.uuid4())
                 with self.lock:
                     self.receivers.add(receiver)
                 secure.settimeout(45)
@@ -294,6 +320,9 @@ class Companion:
                             break
                         if message.get('type') == 'HEARTBEAT' and message.get('isAck') is False:
                             write_frame(stream, dict(message, isAck=True))
+                        elif message.get('type') == 'FILE_ACK':
+                            if self.sender:
+                                self.sender.handle_ack(message)
                         elif message.get('type') in ('FILE_INIT', 'FILE_CHUNK', 'FILE_CANCEL'):
                             ack = receiver.process(message, self.files)
                             write_frame(stream, ack)
@@ -324,6 +353,9 @@ class Companion:
                 self.receivers.discard(receiver)
                 if self.active_socket is secure:
                     self.active_socket = self.active_stream = self.active_id = None
+                    self.connection_id = ""
+                    if self.sender:
+                        self.sender.cancel()
                 self.connections.discard(raw)
                 self.connections.discard(secure)
             if secure:
@@ -344,6 +376,22 @@ class Companion:
             with self.lock:
                 self.connections.add(raw)
             threading.Thread(target=self.handle, args=(raw,), daemon=True).start()
+
+    def start_file(self, path, connection_id):
+        with self.lock:
+            destination = self.active_stream
+            if destination is None or not connection_id or connection_id != self.connection_id:
+                raise ValueError('Phone connection changed. Choose the file again.')
+            if self.sender and self.sender.busy:
+                raise ValueError('A file is already being sent')
+            def send(message):
+                with self.lock:
+                    if self.active_stream is not destination or self.connection_id != connection_id or self.stop_event.is_set():
+                        raise ValueError('Phone connection changed')
+                    write_frame(destination, message)
+            self.sender = FileSender(self.directory / 'OutgoingFiles', send, self.report)
+            self.sender.start(path)
+        self.emit_state()
 
     def push_clipboard(self):
         if not self.clipboard:
@@ -371,11 +419,16 @@ class Companion:
                 except OSError:
                     pass
                 self.active_socket = self.active_stream = self.active_id = None
+                self.connection_id = ""
+                if self.sender:
+                    self.sender.cancel()
 
     def close(self):
         self.stop_event.set()
         self.listener.close()
         with self.lock:
+            if self.sender:
+                self.sender.cancel()
             for receiver in self.receivers:
                 receiver.abort()
             for connection in self.connections:
@@ -415,7 +468,7 @@ def main():
     else:
         print('PAIRING_URI=' + companion.pairing_uri(address), flush=True)
         print(f'Mac endpoint: {address}:{companion.port}. Keep this companion running while pairing.', flush=True)
-        print('Code expires in 5 minutes. Commands: /push, /code, /peers, /forget ID, /quit', flush=True)
+        print('Code expires in 5 minutes. Commands: /push, /send PATH, /code, /peers, /forget ID, /quit', flush=True)
     worker = threading.Thread(target=companion.serve, daemon=True)
     worker.start()
     try:
@@ -445,6 +498,8 @@ def main():
                         break
                     if command == '/push':
                         companion.push_clipboard()
+                    elif command.startswith('/send '):
+                        companion.start_file(command[6:], companion.connection_id)
                     elif command == '/code':
                         address = args.address or detect_address()
                         companion.rotate_code()

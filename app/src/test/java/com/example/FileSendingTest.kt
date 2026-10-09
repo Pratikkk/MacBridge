@@ -33,6 +33,7 @@ class FileSendingTest {
         override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer }
         override suspend fun deleteById(transferId: String) { values.remove(transferId) }
         override suspend fun failInterruptedOutgoing() {}
+        override suspend fun failInterruptedIncoming() {}
     }
     private class Provider(val file: File, val denied: Boolean = false, val size: Long? = file.length()) : ContentProvider() {
         override fun onCreate() = true

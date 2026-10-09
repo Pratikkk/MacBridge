@@ -15,6 +15,11 @@ final class CompanionController: ObservableObject {
     @Published private(set) var lastAction = "Starting companion…"
     @Published private(set) var errorMessage: String?
     @Published private(set) var clipboardEnabled = UserDefaults.standard.object(forKey: "clipboardEnabled") as? Bool ?? true
+    @Published private(set) var fileSending = false
+    @Published private(set) var fileSendStatus = "idle"
+    @Published private(set) var sentBytes: Int64 = 0
+    @Published private(set) var fileSize: Int64 = 0
+    private var connectionId = ""
     @Published private(set) var filesEnabled = UserDefaults.standard.bool(forKey: "filesEnabled")
     private var child: Process?
     private var input: FileHandle?
@@ -57,6 +62,9 @@ final class CompanionController: ObservableObject {
                 self.input = nil
                 self.running = false
                 self.connected = false
+                self.fileSending = false
+                self.fileSendStatus = "idle"
+                self.connectionId = ""
                 self.pairingURI = ""
                 self.endpoint = "Companion stopped"
                 if terminated.terminationStatus != 0 {
@@ -108,6 +116,11 @@ final class CompanionController: ObservableObject {
         expiresAt = Date(timeIntervalSince1970: value.expiresAt ?? 0)
         clipboardEnabled = value.clipboardEnabled ?? false
         filesEnabled = value.filesEnabled ?? false
+        connectionId = value.connectionId ?? ""
+        fileSending = value.fileSending ?? false
+        fileSendStatus = value.fileSendStatus ?? "idle"
+        sentBytes = value.sentBytes ?? 0
+        fileSize = value.fileSize ?? 0
         lastAction = value.lastAction ?? "Ready"
         errorMessage = nil
     }
@@ -134,6 +147,23 @@ final class CompanionController: ObservableObject {
         UserDefaults.standard.set(enabled, forKey: "filesEnabled")
         command(["action": "setFilesEnabled", "enabled": enabled])
     }
+    func sendFileToPhone() {
+        guard running, connected, !fileSending, !connectionId.isEmpty else { return }
+        let destination = connectionId
+        let panel = NSOpenPanel()
+        panel.title = "Send File to Phone"
+        panel.message = "Choose one file up to 100 MB. Enable File sharing for this Mac in Android Devices."
+        panel.prompt = "Send"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] result in
+            guard result == .OK, let url = panel.url else { return }
+            self?.command(["action": "sendFile", "path": url.path, "connectionId": destination])
+        }
+    }
+    func cancelFileSend() { command(["action": "cancelFileSend"]) }
     func showReceivedFiles() {
         let folder = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MacBridgeDev/ReceivedFiles", isDirectory: true)
@@ -173,6 +203,9 @@ final class CompanionController: ObservableObject {
         if previous?.isRunning == true { previous?.terminate() }
         running = false
         connected = false
+        fileSending = false
+        fileSendStatus = "idle"
+        connectionId = ""
         pairingURI = ""
     }
 }

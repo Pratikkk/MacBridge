@@ -58,6 +58,7 @@ class BridgeManager(
 
     lateinit var secureTransport: SecureTransport
     lateinit var clipboardManager: ClipboardSyncManager
+    lateinit var fileReceivingManager: FileReceivingManager
     lateinit var fileTransferManager: FileTransferManager
     lateinit var macSimulator: MacSimulatorBench
 
@@ -80,24 +81,10 @@ class BridgeManager(
             sendProtocolMessage = { secureTransport.sendMessage(it) }
         )
 
-        fileTransferManager = FileTransferManager(
-            context = context,
-            fileTransferDao = database.fileTransferDao(),
-            scope = scope,
-            target = {
-                val state = secureTransport.connectionState.value as? ConnectionState.Connected
-                val saved = state?.let { database.pairedDeviceDao().getDeviceById(it.device.id) }
-                if (state == null || state.isSimulated || saved == null || saved.isBlocked || !saved.allowFileTransfer) null
-                else FileTransferTarget(saved, state.connectedSince)
-            },
-            send = { message, destination ->
-                val state = secureTransport.connectionState.value as? ConnectionState.Connected
-                val saved = database.pairedDeviceDao().getDeviceById(destination.device.id)
-                if (state?.device?.id != destination.device.id || state.connectedSince != destination.session ||
-                    saved == null || saved.isBlocked || (!saved.allowFileTransfer && message !is ProtocolMessage.FileCancel)) false
-                else secureTransport.sendMessage(message, destination.device.id)
-            }
-        )
+        fileTransferManager = FileTransferManager(context, database.fileTransferDao(), scope,
+            target = { fileTarget() }, send = { message, destination -> sendFileFrame(message, destination) })
+        fileReceivingManager = FileReceivingManager(context, database.fileTransferDao(), scope,
+            target = { fileTarget() }, send = { message, destination -> sendFileFrame(message, destination) })
 
         macSimulator = MacSimulatorBench(
             scope = scope,
@@ -109,6 +96,22 @@ class BridgeManager(
 
         // This version only initiates authenticated connections to the Mac.
         nsdManager.startDiscovery()
+    }
+
+    private suspend fun fileTarget(): FileTransferTarget? {
+        val state = secureTransport.connectionState.value as? ConnectionState.Connected ?: return null
+        val saved = database.pairedDeviceDao().getDeviceById(state.device.id) ?: return null
+        if (state.isSimulated || saved.isBlocked || !saved.allowFileTransfer || saved.fingerprint != state.device.fingerprint) return null
+        return FileTransferTarget(saved, state.connectedSince)
+    }
+
+    private suspend fun sendFileFrame(message: ProtocolMessage, destination: FileTransferTarget): Boolean {
+        val state = secureTransport.connectionState.value as? ConnectionState.Connected ?: return false
+        val saved = database.pairedDeviceDao().getDeviceById(destination.device.id) ?: return false
+        if (state.isSimulated || state.device.id != destination.device.id || state.connectedSince != destination.session ||
+            saved.isBlocked || saved.fingerprint != destination.device.fingerprint ||
+            (!saved.allowFileTransfer && message !is ProtocolMessage.FileCancel && message !is ProtocolMessage.FileAck)) return false
+        return secureTransport.sendMessage(message, destination.device.id)
     }
 
     val isConnected: Boolean
@@ -253,6 +256,9 @@ class BridgeManager(
                 }
             }
             is ProtocolMessage.FileAck -> fileTransferManager.handleAck(msg, device.id)
+            is ProtocolMessage.FileInit, is ProtocolMessage.FileChunk, is ProtocolMessage.FileCancel -> {
+                if (!state.isSimulated) fileReceivingManager.process(msg, FileTransferTarget(device, state.connectedSince))
+            }
             is ProtocolMessage.NotificationAction -> {
                 if (device.allowNotifications && msg.actionType == "DISMISS") {
                     scope.launch(Dispatchers.IO) {

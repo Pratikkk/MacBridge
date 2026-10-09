@@ -12,6 +12,12 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.model.FileTransferItem
+import com.example.model.TransferDirection
+import kotlinx.coroutines.launch
+import android.widget.Toast
 import androidx.compose.ui.unit.dp
 import com.example.manager.BridgeManager
 import com.example.model.ConnectionState
@@ -21,6 +27,21 @@ import com.example.ui.theme.*
 
 @Composable
 fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
+    val context = LocalContext.current
+    var pendingSave by rememberSaveable { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        val id = pendingSave
+        pendingSave = null
+        if (uri != null && id != null) {
+            saving = true
+            bridgeManager.scope.launch {
+                val ok = bridgeManager.fileReceivingManager.saveAs(id, uri)
+                saving = false
+                Toast.makeText(context, if (ok) "File saved" else "Could not save. Your verified copy is still here; try Save As again.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
     val state by bridgeManager.secureTransport.connectionState.collectAsState()
     val devices by bridgeManager.pairedDevices.collectAsState()
     val history by bridgeManager.fileTransfers.collectAsState()
@@ -32,7 +53,7 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
         if (uri != null) bridgeManager.fileTransferManager.sendFile(uri)
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { ScreenTitle("Files", "From your phone, safely to your Mac.") }
+        item { ScreenTitle("Files", "Verified sharing in both directions.") }
         item {
             FileSendCard(enabled, busy, onChoose = { picker.launch(arrayOf("*/*")) }, onDevices)
         }
@@ -40,31 +61,20 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
         if (history.isEmpty()) item {
             Panel {
                 Icon(Icons.Outlined.FolderOpen, contentDescription = null, tint = Slate400)
-                Text("Your sent files will appear here", style = MaterialTheme.typography.titleMedium)
+                Text("Your shared files will appear here", style = MaterialTheme.typography.titleMedium)
                 Text("Choose your first document to get started.", color = Slate400)
             }
         }
         items(history, key = { it.transferId }) { item ->
-            Panel {
-                Text(item.fileName, style = MaterialTheme.typography.titleMedium)
-                val label = when (item.status) {
-                    TransferStatus.PENDING -> "Preparing document…"
-                    TransferStatus.TRANSFERRING -> "Sending · ${item.transferredBytes / 1024} / ${item.fileSize / 1024} KB"
-                    TransferStatus.COMPLETED -> if (item.transferId.startsWith("file-v1-")) "Received & verified by Mac" else "Previous transfer record"
-                    TransferStatus.FAILED -> item.errorMessage ?: "Transfer failed. Choose the file to retry."
-                    TransferStatus.PAUSED -> "Interrupted. Choose the file to retry."
-                }
-                Text(label, color = if (item.status == TransferStatus.FAILED) RoseNeon else Slate400)
-                if (item.status == TransferStatus.TRANSFERRING) {
-                    LinearProgressIndicator(progress = { if (item.fileSize > 0) item.transferredBytes.toFloat() / item.fileSize else 0f },
-                        modifier = Modifier.fillMaxWidth())
-                }
-                if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING)) {
-                    TextButton(onClick = { bridgeManager.fileTransferManager.cancelTransfer(item.transferId) }) { Text("Cancel transfer") }
-                }
-            }
+            FileTransferCard(item, saving,
+                onSave = { pendingSave = item.transferId; saver.launch(item.fileName) },
+                onCancel = {
+                    if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
+                    else bridgeManager.scope.launch { bridgeManager.fileReceivingManager.cancel(item.transferId) }
+                })
         }
     }
+
 }
 
 @Composable
@@ -85,7 +95,42 @@ fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevice
         Text("On your Mac", style = MaterialTheme.typography.titleMedium)
         Text("Turn on Allow file receiving. Open Show Received Files to find your verified documents.",
             color = Slate400, style = MaterialTheme.typography.bodyMedium)
-        Text("Interrupted? Choose the file again to retry.", color = Slate400,
+        Text("Receive: Mac menu → Send File to Phone… Then use Save As… below.", color = Slate400,
             style = MaterialTheme.typography.bodyMedium)
+        Text("Interrupted? Send the file again to retry.", color = Slate400,
+            style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit, onCancel: () -> Unit) {
+    Panel {
+        Text(item.fileName, style = MaterialTheme.typography.titleMedium)
+        val incoming = item.direction == TransferDirection.INCOMING
+        Text(if (incoming) "Mac → Phone" else "Phone → Mac", color = Slate400,
+            style = MaterialTheme.typography.labelMedium)
+        val verified = item.status == TransferStatus.COMPLETED &&
+            (if (incoming) item.transferId.startsWith("incoming-") && item.filePath != null && item.calculatedChecksum == item.sha256Checksum else item.transferId.startsWith("file-v1-"))
+        val label = when (item.status) {
+            TransferStatus.PENDING -> "Preparing document…"
+            TransferStatus.TRANSFERRING -> "${if (incoming) "Receiving" else "Sending"} · ${item.transferredBytes / 1024} / ${item.fileSize / 1024} KB"
+            TransferStatus.COMPLETED -> if (verified) (if (incoming) "Received & verified on this phone" else "Received & verified by Mac") else "Previous transfer record"
+            TransferStatus.FAILED -> item.errorMessage ?: "Transfer failed. Send the file again to retry."
+            TransferStatus.PAUSED -> "Interrupted. Send the file again to retry."
+        }
+        Text(label, color = if (item.status == TransferStatus.FAILED) RoseNeon else Slate400)
+        if (item.status == TransferStatus.TRANSFERRING) {
+            LinearProgressIndicator(progress = { if (item.fileSize > 0) (item.transferredBytes.toFloat() / item.fileSize).coerceIn(0f, 1f) else 0f },
+                modifier = Modifier.fillMaxWidth())
+        }
+        if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING)) {
+            TextButton(onClick = onCancel) { Text("Cancel transfer") }
+        }
+        if (incoming && verified) {
+            OutlinedButton(onClick = onSave, enabled = !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .testTag("save_file_${item.transferId}")) { Text(if (saving) "Saving…" else "Save As…") }
+            Text("This copy stays private until you choose where to save it.", color = Slate400,
+                style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }

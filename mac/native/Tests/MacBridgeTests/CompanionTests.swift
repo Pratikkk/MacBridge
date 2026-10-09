@@ -49,6 +49,13 @@ struct CompanionChecks {
         try require(fileState.first?.filesEnabled == true, "File receiving permission did not decode")
         print("PASS: file receiving permission status")
 
+        var sending = EventBuffer()
+        let sendState = try sending.append(Data("{\"event\":\"state\",\"connectionId\":\"session\",\"fileSending\":true,\"sentBytes\":65536,\"fileSize\":80000}\n".utf8))
+        try require(sendState.first?.connectionId == "session" && sendState.first?.fileSending == true &&
+            sendState.first?.sentBytes == 65536 && sendState.first?.fileSize == 80000,
+            "File sending state and connection identity did not decode")
+        print("PASS: file sending progress and original connection identity")
+
         let pipe = Pipe()
         let delivered = DispatchSemaphore(value: 0)
         let ended = DispatchSemaphore(value: 0)

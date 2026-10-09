@@ -1,6 +1,6 @@
 # MacBridge
 
-An Android-to-Mac local-network bridge. The current milestone supports authenticated QR or pasted-code pairing, clipboard exchange, verified phone-to-Mac file sending, reconnecting, and a native Mac menu-bar UI.
+An Android-to-Mac local-network bridge. The current milestone supports authenticated QR or pasted-code pairing, clipboard exchange, verified file sharing in both directions, reconnecting, and a native Mac menu-bar UI.
 
 The Android app pins the Mac TLS public key and proves its own Keystore identity with a signed challenge. Pairing codes expire after five minutes and work once. New Android peers start with sharing permissions disabled.
 
@@ -46,7 +46,7 @@ These checks cover identity and code rejection, Unicode, bounded and malformed f
 
 ## Remaining work
 
-The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage, Mac-to-phone files, transfer resume, notification actions, and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage, transfer resume, notification actions, and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
 
 ## Pair by QR
 
@@ -61,7 +61,7 @@ Automated tests use injected scanner results and verify the real pairing protoco
 The Android app uses a black-and-white palette with soft decorative blur behind the Home connection card. Text and controls are never blurred; older Android versions retain the gradient background.
 
 - **Home**: connection status, pair/connect/cancel, clipboard sending and a shortcut to Share. If several Macs are saved, choose one in Devices.
-- **Share**: Clipboard and Files tabs. Choose a document to send to the Mac with verified progress and cancellation, or send current phone text, instructions for receiving Mac text, and local history with copy, expand and confirmed clearing. Send actions are disabled when disconnected, blocked, in demo mode or when the latest stored sharing permission is off.
+- **Share**: Clipboard and Files tabs. Send documents in either direction with verified progress, cancellation and Save As for received files, or send current phone text, instructions for receiving Mac text, and local history with copy, expand and confirmed clearing. Send actions are disabled when disconnected, blocked, in demo mode or when the latest stored sharing permission is off.
 - **Devices**: paired Macs first, clipboard and file sharing permissions, connect/disconnect, identity disclosure and confirmed removal. Scan or paste to add another Mac.
 - **Settings**: sharing permissions, Android battery settings, security diagnostics and a clearly labelled roadmap for unfinished notification features. Prototype simulator and benchmark actions are outside the everyday navigation.
 
@@ -73,8 +73,18 @@ Enable **Devices → File sharing** for the chosen Mac on Android and **Allow fi
 
 The app takes a bounded private snapshot, sends 64 KB chunks over the authenticated TLS session and waits for each acknowledgement. It marks a transfer complete only when the Mac confirms the exact byte count and SHA-256 checksum. Zero-byte files are supported. The Mac saves verified files in `~/Library/Application Support/MacBridgeDev/ReceivedFiles`; **Show Received Files** opens that folder. Files are never opened automatically.
 
-Cancellation, disconnect, permission revocation and shutdown remove unverified Mac partial files; startup clears interrupted partials after a process crash. Android clears temporary snapshots and marks interrupted history entries failed on restart. Completed files remain. Failed or cancelled transfers can be retried by choosing the document again; resume and Mac-to-phone sending are future work. This milestone uses the in-app picker; Android file share-sheet intents direct you to Share → Files.
+Cancellation, disconnect, permission revocation and shutdown remove unverified Mac partial files; startup clears interrupted partials after a process crash. Android clears temporary snapshots and marks interrupted history entries failed on restart. Completed files remain. Failed or cancelled transfers can be retried by choosing the document again; resume is future work. This milestone uses the in-app picker; Android file share-sheet intents direct you to Share → Files.
 
 File tests cover normal multi-chunk and empty transfers, Unicode names, checksum rejection, ordering and malformed chunks, oversized documents (including unknown sizes), unrelated-peer acknowledgements, revoked document access, disabled sharing, timeouts, disconnects, cancellation, duplicate names, disk-space rejection and shutdown/restart cleanup. The Android-to-Python integration test verifies actual TLS delivery and cancellation against an isolated receive folder.
 
 The Android interface uses monochrome panels and a two-option Clipboard/Files selector. The Mac companion follows the native menu-bar pattern: a compact system menu with connection status, clipboard sending, the received-files folder and sharing checkmarks. Pairing, device management and detailed status open in a separate settings window. The menu follows macOS appearance and keyboard navigation, and daily actions require no scrolling. Android recovery actions remain reachable with enlarged text.
+
+## Send a file from Mac to phone
+
+Connect the phone and enable **Devices → File sharing** for this Mac on Android. Choose **Send File to Phone…** in the Mac menu, then select one regular file up to 100 MB. The Mac snapshots the selected file privately, sends bounded chunks, and reports delivery only after Android confirms the exact size and SHA-256 checksum. The send is tied to the connection that was active when the picker opened; reconnect or phone switching requires choosing the file again. **Cancel File Sending** stops an active send. The menu shows preparation, progress and the final result without adding a scrolling dashboard.
+
+On Android open **Share → Files**. Incoming transfers have a **Mac → Phone** label. Verified files stay in app-private storage until you tap **Save As…** and choose a destination in the system document picker. Cancelling that picker leaves the private copy intact. Save As rechecks the source checksum; access or provider failures keep the verified copy available for retry and attempt to remove any failed export if the provider supports deletion. Files are never opened automatically, and no broad storage permission is requested. Private received copies remain saved after export.
+
+One transfer can run in each direction at a time. Interrupted receiving, revoked file permission, changed sessions and idle transfers discard unverified partials. Startup clears stale incoming partials and marks interrupted history failed; completed copies remain. Retry by sending the file again; resume and Android file share-sheet integration remain future work. A lost final acknowledgement can leave a verified private copy on Android while the Mac reports that delivery was not confirmed.
+
+Reverse-transfer checks cover real Python-to-Android TLS delivery, empty and multi-chunk files, Unicode and safe names, malformed metadata/chunks, duplicate identities, checksum rejection, permission changes, unrelated acknowledgements, cancel/disconnect/timeout/shutdown cleanup, restart recovery and Save As permission or source failures. System picker interaction on a physical phone remains a manual check.
