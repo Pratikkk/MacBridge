@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+enum class TextSendResult {
+    SENT, EMPTY_TEXT, NOT_CONNECTED, PERMISSION_DENIED, SEND_FAILED
+}
+
 /**
  * Phase 4: Clipboard Sync.
  * Handles Android 10+ background restrictions with multi-surface triggers:
@@ -48,7 +52,7 @@ class ClipboardSyncManager(
                 val text = clip.getItemAt(0)?.coerceToText(context)?.toString()
                 if (!text.isNullOrBlank() && text.hashCode() != lastSyncedHash) {
                     _lastCopiedText.value = text
-                    DiagnosticLogger.d(TAG, "Local clipboard updated: ${text.take(30)}...")
+                    DiagnosticLogger.d(TAG, "Local clipboard updated (${text.length} characters)")
                 }
             }
         } catch (e: Exception) {
@@ -59,23 +63,33 @@ class ClipboardSyncManager(
     /**
      * Triggered manually by user tap, Quick Settings Tile, or persistent notification action.
      */
-    fun pushCurrentClipboardToMac(deviceName: String): Boolean {
-        return try {
-            val clip = clipboard.primaryClip
-            val text = clip?.getItemAt(0)?.coerceToText(context)?.toString()
-            if (text.isNullOrBlank()) {
-                DiagnosticLogger.w(TAG, "Cannot sync: Clipboard is empty")
-                return false
-            }
+    fun readCurrentText(): String? = try {
+        val clip = clipboard.primaryClip
+        if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context)?.toString() else null
+    } catch (e: Exception) {
+        DiagnosticLogger.w(TAG, "Could not read clipboard: ${e.javaClass.simpleName}")
+        null
+    }
 
-            lastSyncedHash = text.hashCode()
+    fun pushCurrentClipboardToMac(deviceName: String): Boolean =
+        sendTextToMac(readCurrentText(), deviceName) == TextSendResult.SENT
+
+    /** Sends the supplied text without reading or replacing the local clipboard. */
+    fun sendTextToMac(
+        text: String?,
+        deviceName: String,
+        send: (ProtocolMessage) -> Boolean = sendProtocolMessage
+    ): TextSendResult {
+        if (text.isNullOrBlank()) return TextSendResult.EMPTY_TEXT
+        return try {
             val msg = ProtocolMessage.ClipboardSync(
                 content = text,
                 sourceDevice = "Android Phone"
             )
-            val sent = sendProtocolMessage(msg)
+            val sent = send(msg)
             if (sent) {
-                DiagnosticLogger.i(TAG, "Pushed clipboard to Mac: \"${text.take(40)}...\"")
+                lastSyncedHash = text.hashCode()
+                DiagnosticLogger.i(TAG, "Sent text to $deviceName (${text.length} characters)")
                 scope.launch(Dispatchers.IO) {
                     clipboardDao.insert(
                         ClipboardItem(
@@ -86,10 +100,10 @@ class ClipboardSyncManager(
                     )
                 }
             }
-            sent
+            if (sent) TextSendResult.SENT else TextSendResult.SEND_FAILED
         } catch (e: Exception) {
-            DiagnosticLogger.e(TAG, "Error pushing clipboard: ${e.message}")
-            false
+            DiagnosticLogger.e(TAG, "Error sending text: ${e.message}")
+            TextSendResult.SEND_FAILED
         }
     }
 
@@ -100,7 +114,7 @@ class ClipboardSyncManager(
                 val clipData = ClipData.newPlainText("MacBridge Copy", msg.content)
                 clipboard.setPrimaryClip(clipData)
                 _lastCopiedText.value = msg.content
-                DiagnosticLogger.i(TAG, "Received clipboard from ${msg.sourceDevice}: \"${msg.content.take(40)}...\"")
+                DiagnosticLogger.i(TAG, "Received clipboard text (${msg.content.length} characters)")
 
                 scope.launch(Dispatchers.IO) {
                     clipboardDao.insert(

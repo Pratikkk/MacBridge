@@ -182,7 +182,7 @@ fun BridgeHomeScreen(
                     TelemetryItem(
                         icon = Icons.Default.Security,
                         label = "Transport",
-                        value = "TLS 1.3 Pinned"
+                        value = "Pinned TLS"
                     )
                     TelemetryItem(
                         icon = Icons.Default.Sync,
@@ -200,9 +200,10 @@ fun BridgeHomeScreen(
                 ) {
                     Button(
                         onClick = {
-                            val ok = bridgeManager.pushClipboard()
+                            bridgeManager.pushClipboard { ok ->
                             if (ok) Toast.makeText(context, "Clipboard pushed to Mac", Toast.LENGTH_SHORT).show()
-                            else Toast.makeText(context, "Clipboard empty or not connected", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(context, "Clipboard unavailable, permission disabled, or Mac disconnected", Toast.LENGTH_SHORT).show()
+                            }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Slate800),
                         modifier = Modifier.weight(1f).testTag("sync_clipboard_button"),
@@ -282,13 +283,13 @@ fun BridgeHomeScreen(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "8 of 8 Security Rules Compliant",
+                        text = "Security Controls In Progress",
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
                         fontSize = 14.sp
                     )
                     Text(
-                        text = "Mutual TLS 1.3 • Zero Cloud • Keystore Protected",
+                        text = "Pinned TLS • Signed Identity • Keystore Protected",
                         color = Slate400,
                         fontSize = 12.sp
                     )
@@ -362,7 +363,7 @@ fun ConnectionHeroCard(
 
                 if (isConnected) {
                     Text(
-                        text = "TLS 1.3",
+                        text = "Pinned TLS",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = CyanNeon,

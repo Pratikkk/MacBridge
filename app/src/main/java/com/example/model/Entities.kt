@@ -12,9 +12,9 @@ data class PairedDevice(
     val lastKnownIp: String,
     val port: Int = 8990,
     val pairedTimestamp: Long = System.currentTimeMillis(),
-    val allowClipboard: Boolean = true,
-    val allowFileTransfer: Boolean = true,
-    val allowNotifications: Boolean = true,
+    val allowClipboard: Boolean = false,
+    val allowFileTransfer: Boolean = false,
+    val allowNotifications: Boolean = false,
     val isBlocked: Boolean = false
 )
 
@@ -84,7 +84,8 @@ sealed class ConnectionState {
         val host: String,
         val port: Int,
         val roundTripTimeMs: Long = 12,
-        val connectedSince: Long = System.currentTimeMillis()
+        val connectedSince: Long = System.currentTimeMillis(),
+        val isSimulated: Boolean = false
     ) : ConnectionState()
     data class Reconnecting(val target: String, val attempt: Int, val delayMs: Long) : ConnectionState()
 }

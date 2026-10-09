@@ -1,0 +1,118 @@
+package com.example
+
+import android.app.Application
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import com.example.crypto.IdentityManager
+import com.example.model.ConnectionState
+import com.example.model.PairedDevice
+import com.example.model.ProtocolMessage
+import com.example.network.PairingCode
+import com.example.network.SecureTransport
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
+/** Real SSLSocket -> Python TLS server; requires local Python 3 and OpenSSL. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
+class SecureTransportIntegrationTest {
+    private fun withMac(test: (PairingCode) -> Unit) {
+        val working = File(System.getProperty("user.dir"))
+        val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
+        val directory = Files.createTempDirectory("macbridge-integration-").toFile()
+        val process = ProcessBuilder("python3", File(root, "mac/macbridge.py").absolutePath,
+            "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",
+            "--address", "127.0.0.1", "--headless", "--echo").redirectErrorStream(true).start()
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val line = executor.submit<String> { process.inputStream.bufferedReader().readLine() ?: error("Mac companion exited before startup") }
+                .get(20, TimeUnit.SECONDS)
+            check(line.startsWith("PAIRING_URI=")) { "Mac companion failed to start" }
+            test(PairingCode.parse(line.removePrefix("PAIRING_URI=")))
+        } finally {
+            process.destroyForcibly()
+            process.waitFor(5, TimeUnit.SECONDS)
+            executor.shutdownNow()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `pair exchange unicode clipboard reconnect and reject consumed secret`() = withMac { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val identity = IdentityManager(context, allowSoftwareFallback = true)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var received = CompletableDeferred<ProtocolMessage>()
+        val transport = SecureTransport(identity, scope, { message, _ -> received.complete(message) }, {})
+        try {
+            runBlocking(Dispatchers.IO) {
+                var persisted: PairedDevice? = null
+                val verified = transport.pairDevice(code.device, code.secret) { persisted = it }
+                assertEquals(verified, persisted)
+                assertTrue(verified.pinnedPublicKey.isNotBlank())
+                assertFalse(verified.allowClipboard)
+                assertFalse(verified.allowFileTransfer)
+                assertFalse(verified.allowNotifications)
+                val text = "Phone → Mac 🌉\nSecond line"
+                assertFalse(transport.sendMessage(ProtocolMessage.ClipboardSync(text, sourceDevice = "Test Phone"), "another-mac"))
+                assertTrue(transport.sendMessage(ProtocolMessage.ClipboardSync(text, sourceDevice = "Test Phone")))
+                assertEquals(text, (withTimeout(5000) { received.await() } as ProtocolMessage.ClipboardSync).content)
+                transport.disconnect()
+                delay(200)
+                assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
+                received = CompletableDeferred()
+                transport.connectToDevice(verified)
+                withTimeout(10000) { transport.connectionState.first { it is ConnectionState.Connected } }
+                assertTrue(transport.sendMessage(ProtocolMessage.ClipboardSync("After reconnect", sourceDevice = "Test Phone")))
+                assertEquals("After reconnect", (withTimeout(5000) { received.await() } as ProtocolMessage.ClipboardSync).content)
+                transport.disconnect()
+                var savedAgain = false
+                try {
+                    transport.pairDevice(code.device, code.secret) { savedAgain = true }
+                    fail("Consumed pairing code must be rejected")
+                } catch (_: Exception) {
+                    assertFalse(savedAgain)
+                    assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
+                }
+            }
+        } finally {
+            transport.stop()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `wrong TLS pin is rejected without persisting a peer`() = withMac { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = SecureTransport(IdentityManager(context, true), scope, { _, _ -> }, {})
+        try {
+            runBlocking(Dispatchers.IO) {
+                var saved = false
+                val wrongPin = "00:".repeat(31) + "00"
+                try {
+                    transport.pairDevice(code.device.copy(fingerprint = wrongPin), code.secret) { saved = true }
+                    fail("Wrong pin must be rejected")
+                } catch (_: javax.net.ssl.SSLHandshakeException) {
+                    assertFalse(saved)
+                    assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
+                }
+                // A failed TLS attempt must not consume the valid pairing code.
+                transport.pairDevice(code.device, code.secret) { saved = true }
+                assertTrue(saved)
+            }
+        } finally {
+            transport.stop()
+            scope.cancel()
+        }
+    }
+}

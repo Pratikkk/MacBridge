@@ -1,316 +1,245 @@
 package com.example.network
 
+import android.util.Base64
 import com.example.crypto.IdentityManager
 import com.example.manager.DiagnosticLogger
 import com.example.model.ConnectionState
 import com.example.model.PairedDevice
 import com.example.model.ProtocolMessage
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import java.io.BufferedReader
-import java.io.BufferedWriter
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
+import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.IOException
 import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLSocket
 
-/**
- * Phase 3: Reliable link & secure transport.
- * Enforces TLS/socket communication with pinned certificate validation,
- * automatic exponential backoff reconnection, and heartbeat timeouts.
- */
+/** Phone-initiated pinned TLS, followed by a signed identity challenge inside TLS. */
 class SecureTransport(
     private val identityManager: IdentityManager,
     private val scope: CoroutineScope,
-    private val onMessageReceived: (ProtocolMessage) -> Unit,
+    private val onMessageReceived: suspend (ProtocolMessage, PairedDevice) -> Unit,
     private val onDeviceVerified: (PairedDevice) -> Unit
 ) {
-    private val TAG = "SecureTransport"
+    private val state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
+    val connectionState = state.asStateFlow()
+    private val lock = Any()
+    private var generation = 0L
+    private var connectJob: Job? = null
+    private var pending: SSLSocket? = null
+    private var targetDeviceId: String? = null
+    @Volatile private var session: Session? = null
 
-    private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+    private class Session(val socket: SSLSocket, val device: PairedDevice) {
+        val input = BufferedInputStream(socket.inputStream)
+        val output = BufferedOutputStream(socket.outputStream)
+        @Volatile var lastAck = System.nanoTime()
+    }
 
-    private var serverSocket: ServerSocket? = null
-    private var clientSocket: Socket? = null
-    private var writer: BufferedWriter? = null
+    private fun current(token: Long) = synchronized(lock) { generation == token }
 
-    private var heartbeatJob: Job? = null
-    private var reconnectJob: Job? = null
-    private var listenJob: Job? = null
-
-    private var activeDevice: PairedDevice? = null
-    private var lastPongReceivedTime = 0L
-    private var consecutiveMissedHeartbeats = 0
-
-    val localPort = 8990
-
-    fun startListening() {
-        if (serverSocket != null) return
-        scope.launch(Dispatchers.IO) {
-            try {
-                serverSocket = ServerSocket(localPort)
-                DiagnosticLogger.i(TAG, "Local secure transport server listening on port $localPort")
-                while (isActive && serverSocket?.isClosed == false) {
-                    val socket = serverSocket?.accept() ?: break
-                    handleIncomingConnection(socket)
-                }
-            } catch (e: Exception) {
-                if (isActive) {
-                    DiagnosticLogger.w(TAG, "Server socket terminated: ${e.message}")
-                }
+    private fun open(device: PairedDevice, secret: String?, token: Long): Session {
+        val key = device.pinnedPublicKey.takeIf { it.isNotBlank() }
+        if (secret == null) require(key != null) { "This legacy device must be paired again" }
+        val socket = PinnedTls.context(device.fingerprint, key).socketFactory.createSocket() as SSLSocket
+        try {
+            synchronized(lock) {
+                check(generation == token) { "Connection cancelled" }
+                pending = socket
+                targetDeviceId = device.id
+                state.value = ConnectionState.Connecting("${device.lastKnownIp}:${device.port}")
             }
+            socket.enabledProtocols = socket.supportedProtocols.filter { it == "TLSv1.3" || it == "TLSv1.2" }.toTypedArray()
+            socket.soTimeout = 10000
+            socket.connect(InetSocketAddress(device.lastKnownIp, device.port), 5000)
+            synchronized(lock) {
+                check(generation == token) { "Connection cancelled" }
+                state.value = ConnectionState.Handshaking(device.name, "Pinned TLS and identity proof")
+            }
+            socket.startHandshake()
+            val certificate = socket.session.peerCertificates.first() as X509Certificate
+            val publicKey = Base64.encodeToString(certificate.publicKey.encoded, Base64.NO_WRAP)
+            val established = Session(socket, device.copy(pinnedPublicKey = publicKey))
+            val challenge = JSONObject(WireFrames.read(established.input))
+            require(challenge.getString("type") == "AUTH_CHALLENGE" && challenge.getInt("protocolVersion") == 2) { "Unsupported authentication protocol" }
+            require(challenge.getString("deviceId") == device.id &&
+                challenge.getString("fingerprint") == device.fingerprint &&
+                challenge.getString("publicKey") == publicKey) { "Mac identity does not match pairing code" }
+            val nonce = challenge.getString("nonce")
+            require(Regex("[0-9a-f]{64}").matches(nonce)) { "Invalid authentication challenge" }
+            val transcript = "macbridge-auth-v2\n$nonce\n${device.id}\n${device.fingerprint}\n${identityManager.deviceId}\n${identityManager.getFingerprint()}"
+            val proof = JSONObject().apply {
+                put("type", "AUTH_PROOF")
+                put("deviceId", identityManager.deviceId)
+                put("deviceName", identityManager.deviceName)
+                put("publicKey", identityManager.getPublicKeyBase64())
+                put("signature", identityManager.signData(transcript.toByteArray(Charsets.UTF_8)))
+                secret?.let { put("secret", it) }
+            }
+            WireFrames.write(established.output, proof.toString())
+            val ack = JSONObject(WireFrames.read(established.input))
+            require(ack.getString("type") == "AUTH_OK" && ack.getString("deviceId") == device.id) { "Mac rejected authentication; use a fresh pairing code" }
+            socket.soTimeout = 45000
+            return established
+        } catch (e: Exception) {
+            socket.close()
+            throw e
+        } finally {
+            synchronized(lock) { if (pending === socket) pending = null }
         }
     }
 
-    private fun handleIncomingConnection(socket: Socket) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-                val out = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
-                DiagnosticLogger.i(TAG, "Incoming connection from ${socket.inetAddress.hostAddress}")
-
-                // Read Hello frame
-                val helloLine = reader.readLine() ?: return@launch
-                val helloMsg = ProtocolCodec.decode(helloLine) as? ProtocolMessage.Hello ?: run {
-                    DiagnosticLogger.w(TAG, "Security rejection: First frame was not Hello message")
-                    socket.close()
-                    return@launch
+    /** Persist a peer only after TLS pinning, challenge response and server approval. */
+    suspend fun pairDevice(device: PairedDevice, secret: String, persist: suspend (PairedDevice) -> Unit): PairedDevice {
+        disconnect()
+        val token = synchronized(lock) { generation }
+        var established: Session? = null
+        try {
+            established = open(device, secret, token)
+            check(current(token)) { "Pairing cancelled" }
+            persist(established.device)
+            install(established, token)
+            val connected = established
+            synchronized(lock) {
+                check(generation == token) { "Pairing cancelled" }
+                connectJob = scope.launch(Dispatchers.IO) {
+                    try { readSession(connected, token) }
+                    catch (e: Exception) { if (current(token)) DiagnosticLogger.w("Transport", "Connection ended: ${e.javaClass.simpleName}") }
+                    finally {
+                        clear(connected, token)
+                        if (current(token)) connectToDevice(connected.device)
+                    }
                 }
-
-                // Verify pinned certificate / fingerprint
-                val pinnedDevice = activeDevice
-                if (pinnedDevice != null && pinnedDevice.fingerprint != helloMsg.fingerprint) {
-                    DiagnosticLogger.e(TAG, "Security baseline 1 & 3 violation: Fingerprint ${helloMsg.fingerprint} does not match pinned certificate ${pinnedDevice.fingerprint}. Connection refused.")
-                    socket.close()
-                    return@launch
-                }
-
-                clientSocket?.close()
-                clientSocket = socket
-                writer = out
-
-                // Respond with our Hello
-                val myHello = ProtocolMessage.Hello(
-                    deviceId = identityManager.deviceId,
-                    deviceName = identityManager.deviceName,
-                    fingerprint = identityManager.getFingerprint()
-                )
-                sendMessage(myHello)
-
-                if (pinnedDevice != null) {
-                    _connectionState.value = ConnectionState.Connected(
-                        device = pinnedDevice,
-                        host = socket.inetAddress.hostAddress ?: "unknown",
-                        port = socket.port
-                    )
-                }
-
-                startHeartbeatLoop()
-                readIncomingStream(reader)
-            } catch (e: Exception) {
-                DiagnosticLogger.e(TAG, "Error handling incoming client: ${e.message}")
-                disconnect()
             }
+            return established.device
+        } catch (e: Exception) {
+            established?.socket?.close()
+            if (current(token)) state.value = ConnectionState.Disconnected
+            throw e
         }
     }
 
     fun connectToDevice(device: PairedDevice, host: String = device.lastKnownIp, port: Int = device.port) {
-        activeDevice = device
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch(Dispatchers.IO) {
-            var attempt = 1
-            var backoffMs = 1000L
-
-            while (isActive) {
-                _connectionState.value = ConnectionState.Connecting("$host:$port")
-                DiagnosticLogger.i(TAG, "Attempting connection to ${device.name} ($host:$port) [attempt $attempt]")
-
-                val socket = Socket()
-                try {
-                    socket.connect(InetSocketAddress(host, port), 5000)
-                    clientSocket = socket
-                    writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
-                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-
-                    _connectionState.value = ConnectionState.Handshaking(device.name, "TLS & Fingerprint Verification")
-
-                    // Send our Hello
-                    val hello = ProtocolMessage.Hello(
-                        deviceId = identityManager.deviceId,
-                        deviceName = identityManager.deviceName,
-                        fingerprint = identityManager.getFingerprint()
-                    )
-                    sendMessage(hello)
-
-                    // Read peer's Hello
-                    val peerHelloLine = reader.readLine()
-                    val peerHello = peerHelloLine?.let { ProtocolCodec.decode(it) } as? ProtocolMessage.Hello
-
-                    if (peerHello == null) {
-                        throw IllegalStateException("Peer failed to send valid Hello frame")
-                    }
-
-                    // Rule 3: Refuse unknown or mismatched fingerprints
-                    if (peerHello.fingerprint != device.fingerprint) {
-                        DiagnosticLogger.e(TAG, "CRITICAL: Pinned fingerprint mismatch! Expected ${device.fingerprint}, got ${peerHello.fingerprint}. Terminating link.")
-                        socket.close()
-                        _connectionState.value = ConnectionState.Disconnected
-                        return@launch
-                    }
-
-                    DiagnosticLogger.i(TAG, "Mutual authentication successful! Pinned fingerprint verified: ${peerHello.fingerprint}")
-                    onDeviceVerified(device)
-
-                    _connectionState.value = ConnectionState.Connected(
-                        device = device,
-                        host = host,
-                        port = port,
-                        roundTripTimeMs = 8L
-                    )
-
-                    startHeartbeatLoop()
-                    readIncomingStream(reader)
-                    break
-                } catch (e: Exception) {
-                    DiagnosticLogger.w(TAG, "Connection attempt $attempt failed: ${e.message}")
-                    socket.close()
-                    _connectionState.value = ConnectionState.Reconnecting(device.name, attempt, backoffMs)
-                    delay(backoffMs)
-                    attempt++
-                    backoffMs = (backoffMs * 2).coerceAtMost(30000L) // Exponential backoff capped at 30s
+        disconnect()
+        val token = synchronized(lock) { generation }
+        synchronized(lock) {
+            if (generation != token) return
+            connectJob = scope.launch(Dispatchers.IO) {
+                var attempt = 1
+                var backoff = 1000L
+                while (isActive && current(token)) {
+                    var connected: Session? = null
+                    try {
+                        connected = open(device.copy(lastKnownIp = host, port = port), null, token)
+                        install(connected, token)
+                        attempt = 1
+                        backoff = 1000L
+                        readSession(connected, token)
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        if (current(token)) DiagnosticLogger.w("Transport", "Connection failed: ${e.javaClass.simpleName}")
+                        // Authentication failures must not be retried or downgraded.
+                        if (e is IllegalArgumentException || e is javax.net.ssl.SSLHandshakeException) {
+                            if (current(token)) state.value = ConnectionState.Disconnected
+                            return@launch
+                        }
+                    } finally { connected?.let { clear(it, token) } }
+                    if (!current(token)) break
+                    state.value = ConnectionState.Reconnecting(device.name, attempt++, backoff)
+                    delay(backoff)
+                    backoff = (backoff * 2).coerceAtMost(30000L)
                 }
             }
         }
     }
 
-    private fun readIncomingStream(reader: BufferedReader) {
-        try {
-            while (scope.isActive) {
-                val line = reader.readLine() ?: break
-                val msg = ProtocolCodec.decode(line)
-                if (msg != null) {
-                    if (msg is ProtocolMessage.Heartbeat) {
-                        handleHeartbeat(msg)
-                    } else {
-                        onMessageReceived(msg)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            DiagnosticLogger.w(TAG, "Stream reading ended: ${e.message}")
-        } finally {
-            onConnectionLost()
+    private fun install(connected: Session, token: Long) {
+        synchronized(lock) {
+            check(generation == token) { "Connection cancelled" }
+            session = connected
+            state.value = ConnectionState.Connected(connected.device, connected.socket.inetAddress.hostAddress ?: "Mac", connected.device.port, roundTripTimeMs = 0)
         }
+        onDeviceVerified(connected.device)
     }
 
-    private fun startHeartbeatLoop() {
-        heartbeatJob?.cancel()
-        lastPongReceivedTime = System.currentTimeMillis()
-        consecutiveMissedHeartbeats = 0
-
-        heartbeatJob = scope.launch(Dispatchers.IO) {
+    private suspend fun readSession(connected: Session, token: Long) = coroutineScope {
+        val heartbeat = launch(Dispatchers.IO) {
             var seq = 0L
-            while (isActive) {
-                delay(10000) // 10s heartbeat interval as in roadmap Phase 3
-                seq++
-                val ping = ProtocolMessage.Heartbeat(seq = seq, isAck = false)
-                val sent = sendMessage(ping)
-                if (!sent) {
-                    consecutiveMissedHeartbeats++
-                }
-
-                // Check if last pong was more than 35s ago (3 missed heartbeats)
-                val elapsedSincePong = System.currentTimeMillis() - lastPongReceivedTime
-                if (elapsedSincePong > 35000 && consecutiveMissedHeartbeats >= 3) {
-                    DiagnosticLogger.w(TAG, "Dead connection detected: 3 heartbeats unacknowledged. Triggering auto-reconnect.")
-                    clientSocket?.close()
+            while (isActive && current(token)) {
+                delay(10000)
+                if (System.nanoTime() - connected.lastAck > 35_000_000_000L) {
+                    connected.socket.close()
                     break
                 }
+                try { WireFrames.write(connected.output, ProtocolCodec.encode(ProtocolMessage.Heartbeat(++seq))) }
+                catch (_: IOException) { connected.socket.close(); break }
+            }
+        }
+        try {
+            while (current(token)) {
+                val message = ProtocolCodec.decode(WireFrames.read(connected.input))
+                    ?: throw IOException("Invalid protocol frame")
+                if (message is ProtocolMessage.Heartbeat) {
+                    if (message.isAck) {
+                        connected.lastAck = System.nanoTime()
+                        synchronized(lock) {
+                            val value = state.value as? ConnectionState.Connected
+                            if (session === connected && value != null) {
+                                state.value = value.copy(roundTripTimeMs = (System.currentTimeMillis() - message.timestamp).coerceAtLeast(0))
+                            }
+                        }
+                    } else {
+                        WireFrames.write(connected.output, ProtocolCodec.encode(message.copy(isAck = true)))
+                    }
+                } else if (session === connected) onMessageReceived(message, connected.device)
+            }
+        } finally { heartbeat.cancel() }
+    }
+
+    private fun clear(connected: Session, token: Long) {
+        connected.socket.close()
+        synchronized(lock) {
+            if (generation == token && session === connected) {
+                session = null
+                state.value = ConnectionState.Disconnected
             }
         }
     }
 
-    private fun handleHeartbeat(heartbeat: ProtocolMessage.Heartbeat) {
-        if (!heartbeat.isAck) {
-            // Send Pong Ack back
-            val ack = ProtocolMessage.Heartbeat(seq = heartbeat.seq, isAck = true)
-            sendMessage(ack)
-        } else {
-            // Pong received
-            lastPongReceivedTime = System.currentTimeMillis()
-            consecutiveMissedHeartbeats = 0
-            val rtt = (System.currentTimeMillis() - heartbeat.timestamp).coerceAtLeast(1)
-            val current = _connectionState.value
-            if (current is ConnectionState.Connected) {
-                _connectionState.value = current.copy(roundTripTimeMs = rtt)
-            }
-        }
-    }
-
-    fun sendMessage(msg: ProtocolMessage): Boolean {
+    fun sendMessage(message: ProtocolMessage, expectedDeviceId: String? = null): Boolean {
+        val connected = session ?: return false
+        if (expectedDeviceId != null && connected.device.id != expectedDeviceId) return false
         return try {
-            val encoded = ProtocolCodec.encode(msg)
-            val w = writer ?: return false
-            synchronized(w) {
-                w.write(encoded)
-                w.newLine()
-                w.flush()
-            }
+            WireFrames.write(connected.output, ProtocolCodec.encode(message))
             true
-        } catch (e: Exception) {
-            DiagnosticLogger.w(TAG, "Failed to send message ${msg.type}: ${e.message}")
-            false
-        }
-    }
-
-    private fun onConnectionLost() {
-        DiagnosticLogger.w(TAG, "Connection lost.")
-        heartbeatJob?.cancel()
-        writer = null
-        try { clientSocket?.close() } catch (_: Exception) {}
-        clientSocket = null
-
-        val device = activeDevice
-        if (device != null) {
-            // Auto reconnect with backoff
-            connectToDevice(device)
-        } else {
-            _connectionState.value = ConnectionState.Disconnected
-        }
+        } catch (_: Exception) { false }
     }
 
     fun disconnect() {
-        reconnectJob?.cancel()
-        heartbeatJob?.cancel()
-        try { clientSocket?.close() } catch (_: Exception) {}
-        clientSocket = null
-        writer = null
-        activeDevice = null
-        _connectionState.value = ConnectionState.Disconnected
-        DiagnosticLogger.i(TAG, "Disconnected cleanly by user")
+        synchronized(lock) {
+            generation++
+            connectJob?.cancel()
+            connectJob = null
+            pending?.close()
+            pending = null
+            session?.socket?.close()
+            session = null
+            targetDeviceId = null
+            state.value = ConnectionState.Disconnected
+        }
+    }
+
+    fun isTargetDevice(id: String): Boolean = synchronized(lock) {
+        targetDeviceId == id || (state.value as? ConnectionState.Connected)?.device?.id == id
     }
 
     fun setSimulatedConnected(device: PairedDevice, rttMs: Long = 9) {
-        activeDevice = device
-        _connectionState.value = ConnectionState.Connected(
-            device = device,
-            host = "192.168.1.142 (MacBook Pro)",
-            port = 8990,
-            roundTripTimeMs = rttMs
-        )
+        disconnect()
+        state.value = ConnectionState.Connected(device, "Demo peer", device.port, rttMs, isSimulated = true)
     }
 
-    fun stop() {
-        disconnect()
-        try { serverSocket?.close() } catch (_: Exception) {}
-        serverSocket = null
-    }
+    fun stop() = disconnect()
 }

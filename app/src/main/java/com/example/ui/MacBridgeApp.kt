@@ -209,7 +209,7 @@ fun ConnectionStatusChip(connectionState: ConnectionState) {
     }
 
     val label = when (connectionState) {
-        is ConnectionState.Connected -> "M3 Max Pinned"
+        is ConnectionState.Connected -> if (connectionState.isSimulated) "Demo Peer" else "Mac Pinned"
         is ConnectionState.Reconnecting -> "Reconnecting"
         is ConnectionState.Connecting -> "Connecting"
         is ConnectionState.Handshaking -> "TLS Handshake"

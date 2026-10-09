@@ -93,7 +93,7 @@ fun SecurityAuditScreen(
     val logs by DiagnosticLogger.logsFlow.collectAsState()
 
     var selectedSection by remember { mutableIntStateOf(0) }
-    val sections = listOf("8-Rule Audit", "Diagnostic Logs", "Keystore")
+    val sections = listOf("Control Status", "Diagnostic Logs", "Keystore")
 
     var selectedLogLevel by remember { mutableStateOf<LogLevel?>(null) }
     var searchQuery by remember { mutableStateOf("") }
@@ -128,7 +128,7 @@ fun SecurityAuditScreen(
                 color = Color.White
             )
             Text(
-                text = "Phase 7 compliance: Zero cloud telemetry, hardware Keystore protection, and local diagnostic event inspection.",
+                text = "Implementation status and local diagnostic logs. An independent security audit is still pending.",
                 fontSize = 12.sp,
                 color = Slate400
             )
@@ -313,13 +313,13 @@ fun SecurityRuleCard(rule: SecurityRule) {
                 }
 
                 Text(
-                    text = "PASS",
+                    text = if (rule.isCompliant) "IMPLEMENTED" else "PENDING",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    color = EmeraldNeon,
+                    color = if (rule.isCompliant) EmeraldNeon else RoseNeon,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(EmeraldGlow.copy(alpha = 0.2f))
+                        .background((if (rule.isCompliant) EmeraldGlow else RoseNeon).copy(alpha = 0.2f))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 )
             }

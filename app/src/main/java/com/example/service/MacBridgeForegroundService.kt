@@ -92,7 +92,7 @@ class MacBridgeForegroundService : Service {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MacBridge Active")
-            .setContentText("Connected to $deviceName • Pinned TLS 1.3")
+            .setContentText("Connected to $deviceName • Pinned TLS")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .setContentIntent(pendingIntent)

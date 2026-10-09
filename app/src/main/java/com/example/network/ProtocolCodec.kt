@@ -11,7 +11,7 @@ import org.json.JSONObject
  */
 object ProtocolCodec {
     private const val TAG = "ProtocolCodec"
-    private const val MAX_FRAME_SIZE = 10 * 1024 * 1024 // 10 MB strict limit
+    private const val MAX_FRAME_SIZE = WireFrames.MAX_BYTES // Enforced on incoming bytes before JSON parsing
 
     fun encode(message: ProtocolMessage): String {
         val json = JSONObject()
@@ -91,8 +91,8 @@ object ProtocolCodec {
     }
 
     fun decode(payload: String): ProtocolMessage? {
-        if (payload.length > MAX_FRAME_SIZE) {
-            DiagnosticLogger.e(TAG, "Security rule violated: Incoming payload exceeds 10MB limit (${payload.length} bytes)")
+        if (payload.toByteArray(Charsets.UTF_8).size > MAX_FRAME_SIZE) {
+            DiagnosticLogger.e(TAG, "Security rule violated: Incoming payload exceeds frame limit (${payload.length} bytes)")
             throw SecurityException("Payload size limit exceeded")
         }
 

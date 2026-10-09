@@ -160,9 +160,10 @@ fun ClipboardScreen(
                     ) {
                         Button(
                             onClick = {
-                                val ok = bridgeManager.pushClipboard()
+                                bridgeManager.pushClipboard { ok ->
                                 if (ok) Toast.makeText(context, "Pushed current clipboard to Mac!", Toast.LENGTH_SHORT).show()
-                                else Toast.makeText(context, "Clipboard empty or bridge disconnected", Toast.LENGTH_SHORT).show()
+                                else Toast.makeText(context, "Clipboard unavailable, permission disabled, or Mac disconnected", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = CyanNeon),
                             shape = RoundedCornerShape(10.dp),

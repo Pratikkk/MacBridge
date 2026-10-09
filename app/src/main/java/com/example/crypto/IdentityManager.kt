@@ -21,7 +21,7 @@ import java.util.UUID
  * Device fingerprint is the SHA-256 hash of the public key, surviving app restarts.
  * Provides seamless fallback for JVM / Robolectric unit testing environments where AndroidKeyStore provider is absent.
  */
-class IdentityManager(private val context: Context) {
+class IdentityManager(private val context: Context, private val allowSoftwareFallback: Boolean = false) {
 
     private val prefs = context.getSharedPreferences("macbridge_identity_prefs", Context.MODE_PRIVATE)
 
@@ -69,16 +69,20 @@ class IdentityManager(private val context: Context) {
                         KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
                     )
                         .setDigests(KeyProperties.DIGEST_SHA256)
+                        .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
                         .build()
 
                     keyPairGenerator.initialize(parameterSpec)
                     keyPairGenerator.generateKeyPair()
                 }
+                if (!allowSoftwareFallback) prefs.edit().remove("sw_pub_key").remove("sw_priv_key").apply()
                 return
-            } catch (_: Exception) {
-                // If Keystore provider fails in test container, fall through to software keypair
+            } catch (e: Exception) {
+                if (!allowSoftwareFallback) throw IllegalStateException("Android Keystore identity unavailable", e)
             }
         }
+
+        check(allowSoftwareFallback) { "Android Keystore identity unavailable" }
 
         // JVM / Robolectric software EC key pair fallback
         if (fallbackKeyPair == null) {
@@ -152,9 +156,8 @@ class IdentityManager(private val context: Context) {
     }
 
     fun generateOneTimePairingSecret(): String {
-        val random = SecureRandom()
-        val pin = 100000 + random.nextInt(900000)
-        return pin.toString()
+        val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     companion object {

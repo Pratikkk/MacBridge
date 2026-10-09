@@ -2,7 +2,6 @@ package com.example.manager
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
 import com.example.crypto.IdentityManager
@@ -14,17 +13,15 @@ import com.example.model.ProtocolMessage
 import com.example.network.MacSimulatorBench
 import com.example.network.NsdDiscoveryManager
 import com.example.network.SecureTransport
+import com.example.network.PairingCode
+import com.example.network.PairingFailure
 import com.example.service.MacBridgeForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.net.Inet4Address
-import java.net.NetworkInterface
+import kotlinx.coroutines.withContext
 
 /**
  * Main coordinator managing all 8 phases of the Android-Mac Bridge roadmap.
@@ -56,9 +53,6 @@ class BridgeManager(
         deviceFingerprint = identityManager.getFingerprint()
     )
 
-    private val _currentPairingSecret = MutableStateFlow(identityManager.generateOneTimePairingSecret())
-    val currentPairingSecret: StateFlow<String> = _currentPairingSecret.asStateFlow()
-
     // App-specific notification mirror filter preferences
     private val appMirrorPrefs = context.getSharedPreferences("macbridge_app_filters", Context.MODE_PRIVATE)
 
@@ -75,7 +69,7 @@ class BridgeManager(
         secureTransport = SecureTransport(
             identityManager = identityManager,
             scope = scope,
-            onMessageReceived = { handleIncomingMessage(it) },
+            onMessageReceived = { message, source -> handleIncomingMessage(message, source.id) },
             onDeviceVerified = { onDeviceVerified(it) }
         )
 
@@ -95,103 +89,42 @@ class BridgeManager(
 
         macSimulator = MacSimulatorBench(
             scope = scope,
-            onSimulatedMessage = { handleIncomingMessage(it) }
+            onSimulatedMessage = { message ->
+                val state = secureTransport.connectionState.value as? ConnectionState.Connected
+                if (state?.isSimulated == true) scope.launch { handleIncomingMessage(message) }
+            }
         )
 
-        // Start local secure transport server & advertise on mDNS
-        secureTransport.startListening()
-        nsdManager.startAdvertising(secureTransport.localPort, identityManager.deviceName)
+        // This version only initiates authenticated connections to the Mac.
         nsdManager.startDiscovery()
     }
 
     val isConnected: Boolean
         get() = secureTransport.connectionState.value is ConnectionState.Connected
 
-    fun refreshPairingSecret(): String {
-        val newSecret = identityManager.generateOneTimePairingSecret()
-        _currentPairingSecret.value = newSecret
-        return newSecret
-    }
-
-    fun getLocalIpAddress(): String {
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                if (iface.isLoopback || !iface.isUp) continue
-                val addresses = iface.inetAddresses
-                while (addresses.hasMoreElements()) {
-                    val addr = addresses.nextElement()
-                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
-                        return addr.hostAddress ?: "127.0.0.1"
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-        return "192.168.1.100"
-    }
-
-    fun getPairingUri(): String {
-        val ip = getLocalIpAddress()
-        val encName = Uri.encode(identityManager.deviceName)
-        return "macbridge://pair?id=${identityManager.deviceId}&name=$encName&fingerprint=${identityManager.getFingerprint()}&ip=$ip&port=${secureTransport.localPort}&secret=${_currentPairingSecret.value}"
-    }
-
-    /**
-     * Phase 2: Parse Mac QR Code payload and perform pinned pairing.
-     * Enforces out-of-band secret verification and pinned certificate registration.
-     */
     fun pairFromQrPayload(rawUri: String, onResult: (Boolean, String) -> Unit) {
         scope.launch(Dispatchers.IO) {
-            try {
-                val uri = Uri.parse(rawUri)
-                if (uri.scheme != "macbridge" || uri.host != "pair") {
-                    onResult(false, "Invalid QR code: Not a MacBridge pairing URI")
-                    return@launch
+            var endpoint: String? = null
+            val result = try {
+                val code = PairingCode.parse(rawUri)
+                endpoint = "${code.device.lastKnownIp}:${code.device.port}"
+                secureTransport.pairDevice(code.device, code.secret) { verified ->
+                    database.pairedDeviceDao().insertOrUpdate(verified)
                 }
-
-                val macId = uri.getQueryParameter("id")
-                val macName = uri.getQueryParameter("name") ?: "Mac"
-                val macFingerprint = uri.getQueryParameter("fingerprint")
-                val macIp = uri.getQueryParameter("ip") ?: "127.0.0.1"
-                val macPort = uri.getQueryParameter("port")?.toIntOrNull() ?: 8990
-                val macSecret = uri.getQueryParameter("secret")
-
-                if (macId.isNullOrBlank() || macFingerprint.isNullOrBlank() || macSecret.isNullOrBlank()) {
-                    onResult(false, "Malformed QR code: Missing fingerprint or pairing secret")
-                    return@launch
-                }
-
-                DiagnosticLogger.i(TAG, "Pairing request initiated with $macName ($macFingerprint)")
-
-                // Save pinned device record
-                val newDevice = PairedDevice(
-                    id = macId,
-                    name = macName,
-                    fingerprint = macFingerprint,
-                    pinnedPublicKey = "PINNED_PUBKEY_$macFingerprint",
-                    lastKnownIp = macIp,
-                    port = macPort,
-                    pairedTimestamp = System.currentTimeMillis()
-                )
-                database.pairedDeviceDao().insertOrUpdate(newDevice)
-
-                DiagnosticLogger.i(TAG, "Pairing approved out-of-band: $macName certificate fingerprint pinned.")
-                onResult(true, "Successfully paired with $macName! Certificate pinned.")
-
-                // Initiate connection
-                connectToDevice(newDevice)
+                true to "Paired securely with ${code.device.name}. Enable Clipboard Sync below to share text."
             } catch (e: Exception) {
-                DiagnosticLogger.e(TAG, "Pairing error: ${e.message}")
-                onResult(false, "Failed to pair: ${e.message}")
+                false to PairingFailure.message(e, endpoint)
             }
+            withContext(Dispatchers.Main) { onResult(result.first, result.second) }
         }
     }
 
     fun connectToDevice(device: PairedDevice, fallbackIp: String? = null) {
         val targetIp = fallbackIp ?: device.lastKnownIp
-        secureTransport.connectToDevice(device, targetIp, device.port)
-        MacBridgeForegroundService.start(context, device.name)
+        scope.launch(Dispatchers.IO) {
+            val saved = database.pairedDeviceDao().getDeviceById(device.id)
+            if (saved != null && !saved.isBlocked) secureTransport.connectToDevice(saved, targetIp, saved.port)
+        }
     }
 
     fun disconnect() {
@@ -202,7 +135,7 @@ class BridgeManager(
     fun unpairDevice(device: PairedDevice) {
         scope.launch(Dispatchers.IO) {
             database.pairedDeviceDao().delete(device)
-            if ((secureTransport.connectionState.value as? ConnectionState.Connected)?.device?.id == device.id) {
+            if (secureTransport.isTargetDevice(device.id)) {
                 disconnect()
             }
             DiagnosticLogger.i(TAG, "Device ${device.name} unpaired and certificate unpinned")
@@ -226,10 +159,29 @@ class BridgeManager(
         }
     }
 
-    fun pushClipboard(): Boolean {
-        val state = secureTransport.connectionState.value
-        val deviceName = if (state is ConnectionState.Connected) state.device.name else "Mac"
-        return clipboardManager.pushCurrentClipboardToMac(deviceName)
+    fun pushClipboard(onResult: (Boolean) -> Unit = {}) {
+        // Android clipboard access stays on the UI thread; socket writes run on IO.
+        val text = clipboardManager.readCurrentText()
+        scope.launch {
+            val result = sendSharedText(text)
+            withContext(Dispatchers.Main) { onResult(result == TextSendResult.SENT) }
+        }
+    }
+
+    suspend fun sendSharedText(text: String?): TextSendResult = withContext(Dispatchers.IO) {
+        if (text.isNullOrBlank()) return@withContext TextSendResult.EMPTY_TEXT
+        val state = secureTransport.connectionState.value as? ConnectionState.Connected
+            ?: return@withContext TextSendResult.NOT_CONNECTED
+        val device = database.pairedDeviceDao().getDeviceById(state.device.id)
+            ?: return@withContext TextSendResult.PERMISSION_DENIED
+        if (device.isBlocked || !device.allowClipboard) {
+            return@withContext TextSendResult.PERMISSION_DENIED
+        }
+        val current = secureTransport.connectionState.value as? ConnectionState.Connected
+        if (current?.device?.id != state.device.id || current.connectedSince != state.connectedSince) {
+            return@withContext TextSendResult.NOT_CONNECTED
+        }
+        clipboardManager.sendTextToMac(text, device.name) { secureTransport.sendMessage(it, device.id) }
     }
 
     fun isAppMirroringEnabled(packageName: String): Boolean {
@@ -272,11 +224,16 @@ class BridgeManager(
         }
     }
 
-    private fun handleIncomingMessage(msg: ProtocolMessage) {
+    private suspend fun handleIncomingMessage(msg: ProtocolMessage, sourceId: String? = null) {
+        val state = secureTransport.connectionState.value as? ConnectionState.Connected ?: return
+        if (sourceId != null && sourceId != state.device.id) return
+        val device = if (state.isSimulated) state.device else database.pairedDeviceDao().getDeviceById(state.device.id) ?: return
+        if (device.isBlocked || device.fingerprint != state.device.fingerprint) return
+        val current = secureTransport.connectionState.value as? ConnectionState.Connected ?: return
+        if (current.device.id != state.device.id || current.connectedSince != state.connectedSince) return
         when (msg) {
             is ProtocolMessage.ClipboardSync -> {
-                val state = secureTransport.connectionState.value
-                val allowed = if (state is ConnectionState.Connected) state.device.allowClipboard else true
+                val allowed = device.allowClipboard
                 if (allowed) {
                     clipboardManager.handleIncomingClipboardFromMac(msg)
                 } else {
@@ -284,8 +241,7 @@ class BridgeManager(
                 }
             }
             is ProtocolMessage.FileInit -> {
-                val state = secureTransport.connectionState.value
-                val allowed = if (state is ConnectionState.Connected) state.device.allowFileTransfer else true
+                val allowed = device.allowFileTransfer
                 if (allowed) {
                     fileTransferManager.handleIncomingInit(msg)
                 } else {
@@ -293,10 +249,10 @@ class BridgeManager(
                 }
             }
             is ProtocolMessage.FileChunk -> {
-                fileTransferManager.handleIncomingChunk(msg)
+                if (device.allowFileTransfer) fileTransferManager.handleIncomingChunk(msg)
             }
             is ProtocolMessage.NotificationAction -> {
-                if (msg.actionType == "DISMISS") {
+                if (device.allowNotifications && msg.actionType == "DISMISS") {
                     scope.launch(Dispatchers.IO) {
                         database.notificationDao().markDismissed(msg.notificationId)
                     }
@@ -307,7 +263,11 @@ class BridgeManager(
     }
 
     private fun onDeviceVerified(device: PairedDevice) {
-        MacBridgeForegroundService.start(context, device.name)
+        try {
+            MacBridgeForegroundService.start(context, device.name)
+        } catch (e: RuntimeException) {
+            DiagnosticLogger.w(TAG, "Background service could not start: ${e.javaClass.simpleName}")
+        }
     }
 
     fun isIgnoringBatteryOptimizations(): Boolean {

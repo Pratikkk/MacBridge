@@ -6,8 +6,11 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.lifecycleScope
+import com.example.manager.TextSendResult
 import com.example.ui.MacBridgeApp
 import com.example.ui.theme.MyApplicationTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -36,12 +39,17 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?, bridgeManager: com.example.manager.BridgeManager) {
         if (intent?.action == Intent.ACTION_SEND) {
-            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-            if (!sharedText.isNullOrBlank()) {
-                val ok = bridgeManager.clipboardManager.pushCurrentClipboardToMac("Mac")
-                if (ok) {
-                    Toast.makeText(this, "Shared text pushed to Mac", Toast.LENGTH_SHORT).show()
+            val sharedText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            lifecycleScope.launch {
+                val result = bridgeManager.sendSharedText(sharedText)
+                val message = when (result) {
+                    TextSendResult.SENT -> "Shared text sent to Mac"
+                    TextSendResult.EMPTY_TEXT -> "No text to share. File sharing is not available yet."
+                    TextSendResult.NOT_CONNECTED -> "Connect to your Mac before sharing text"
+                    TextSendResult.PERMISSION_DENIED -> "Enable clipboard sharing for this Mac in Devices"
+                    TextSendResult.SEND_FAILED -> "Could not send text. Check your Mac connection and try again."
                 }
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
             }
         }
     }

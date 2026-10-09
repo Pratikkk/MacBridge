@@ -26,11 +26,12 @@ class MacBridgeTileService : TileService() {
         super.onClick()
         val app = application as? MacBridgeApplication ?: return
         DiagnosticLogger.i(TAG, "Quick Settings Tile tapped: Sync Clipboard")
-        val success = app.bridgeManager.pushClipboard()
-        if (success) {
-            Toast.makeText(this, "MacBridge: Clipboard synced to Mac", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "MacBridge: No active Mac connection or empty clipboard", Toast.LENGTH_SHORT).show()
+        app.bridgeManager.pushClipboard { success ->
+            if (success) {
+                Toast.makeText(this, "MacBridge: Clipboard sent to Mac", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "MacBridge: Check clipboard access, sharing permission and Mac connection", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 }

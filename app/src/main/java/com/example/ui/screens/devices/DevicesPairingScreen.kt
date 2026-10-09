@@ -69,7 +69,6 @@ import androidx.compose.ui.unit.sp
 import com.example.manager.BridgeManager
 import com.example.model.DiscoveredPeer
 import com.example.model.PairedDevice
-import com.example.ui.components.QrCodeView
 import com.example.ui.theme.*
 
 @Composable
@@ -80,12 +79,11 @@ fun DevicesPairingScreen(
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
 
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Show QR", "Pair Mac QR", "mDNS Peers")
+    var selectedTab by remember { mutableIntStateOf(1) }
+    val tabs = listOf("Phone Identity", "Pair Mac", "Local Peers")
 
     val pairedDevices by bridgeManager.pairedDevices.collectAsState()
     val discoveredPeers by bridgeManager.nsdManager.discoveredPeers.collectAsState()
-    val pairingSecret by bridgeManager.currentPairingSecret.collectAsState()
 
     var qrInput by remember { mutableStateOf("") }
     var pairingStatusMessage by remember { mutableStateOf<String?>(null) }
@@ -115,7 +113,7 @@ fun DevicesPairingScreen(
                 color = Color.White
             )
             Text(
-                text = "Rule 3: Pair out-of-band via QR code with one-time secrets. Devices without pinned certificates are strictly refused.",
+                text = "Paste the one-time code from your Mac companion. The code pins the Mac identity before encrypted pairing.",
                 fontSize = 12.sp,
                 color = Slate400
             )
@@ -157,11 +155,7 @@ fun DevicesPairingScreen(
             0 -> {
                 // Show Phone's QR Code
                 item {
-                    ShowPhoneQrCard(
-                        bridgeManager = bridgeManager,
-                        pairingSecret = pairingSecret,
-                        onRefreshSecret = { bridgeManager.refreshPairingSecret() }
-                    )
+                    ShowPhoneQrCard(bridgeManager = bridgeManager)
                 }
             }
             1 -> {
@@ -170,9 +164,6 @@ fun DevicesPairingScreen(
                     PairWithMacQrCard(
                         qrInput = qrInput,
                         onQrInputChange = { qrInput = it },
-                        onLoadSimulated = {
-                            qrInput = bridgeManager.macSimulator.getPairingPayloadUri()
-                        },
                         onPair = {
                             bridgeManager.pairFromQrPayload(qrInput) { success, msg ->
                                 isSuccessStatus = success
@@ -191,7 +182,9 @@ fun DevicesPairingScreen(
                     MdnsDiscoveryCard(
                         discoveredPeers = discoveredPeers,
                         onPairPeer = { peer ->
-                            qrInput = "macbridge://pair?id=${peer.id}&name=${peer.name}&fingerprint=${peer.fingerprintHint ?: "UNKNOWN"}&ip=${peer.host}&port=${peer.port}&secret=000000"
+                            qrInput = ""
+                            isSuccessStatus = false
+                            pairingStatusMessage = "Open ${peer.name}'s Mac companion and paste its pairing code here. Discovery cannot authorize pairing."
                             selectedTab = 1
                         }
                     )
@@ -215,7 +208,7 @@ fun DevicesPairingScreen(
                     letterSpacing = 1.sp
                 )
                 Text(
-                    text = "Mutual Auth Pinned",
+                    text = "TLS + Signed Identity",
                     fontSize = 11.sp,
                     color = EmeraldNeon,
                     fontFamily = FontFamily.Monospace
@@ -237,7 +230,7 @@ fun DevicesPairingScreen(
                         Icon(Icons.Default.Devices, contentDescription = null, tint = Slate600, modifier = Modifier.size(36.dp))
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("No Paired Mac Yet", color = Slate200, fontWeight = FontWeight.Bold)
-                        Text("Scan Mac's QR code or load the Mac demo peer above.", color = Slate400, fontSize = 12.sp)
+                        Text("Paste the pairing code from the Mac companion above.", color = Slate400, fontSize = 12.sp)
                     }
                 }
             }
@@ -257,108 +250,21 @@ fun DevicesPairingScreen(
 }
 
 @Composable
-fun ShowPhoneQrCard(
-    bridgeManager: BridgeManager,
-    pairingSecret: String,
-    onRefreshSecret: () -> Unit
-) {
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
-    val pairingUri = bridgeManager.getPairingUri()
+fun ShowPhoneQrCard(bridgeManager: BridgeManager) {
+    val clipboard = LocalClipboardManager.current
     val fingerprint = bridgeManager.identityManager.getFingerprint()
-
     Card(
         colors = CardDefaults.cardColors(containerColor = Slate900),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Slate800, RoundedCornerShape(16.dp))
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "Scan from Mac App",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Text(
-                text = "Hold this QR code up to your Mac's camera or enter PIN below.",
-                fontSize = 12.sp,
-                color = Slate400
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // QR Code View
-            QrCodeView(
-                data = pairingUri,
-                size = 200.dp
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // One-Time Secret Badge
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Slate800)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(text = "One-Time Secret: ", color = Slate400, fontSize = 12.sp)
-                Text(
-                    text = pairingSecret,
-                    color = EmeraldNeon,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(onClick = onRefreshSecret, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh PIN", tint = CyanNeon, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Phone Keystore Fingerprint Display
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Slate850)
-                    .padding(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Phone Keystore Fingerprint",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Slate400
-                    )
-                    IconButton(
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(fingerprint))
-                            Toast.makeText(context, "Fingerprint copied to clipboard", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.size(20.dp)
-                    ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = CyanNeon, modifier = Modifier.size(14.dp))
-                    }
-                }
-                Text(
-                    text = fingerprint,
-                    fontSize = 10.sp,
-                    color = CyanNeon,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 14.sp
-                )
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Phone Identity", color = Color.White, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text("The phone initiates connections to your Mac. Pair using the code displayed by the Mac companion.", color = Slate400, fontSize = 12.sp)
+            Spacer(Modifier.height(12.dp))
+            Text(fingerprint, color = CyanNeon, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            OutlinedButton(onClick = { clipboard.setText(AnnotatedString(fingerprint)) }) {
+                Text("Copy Phone Fingerprint", color = CyanNeon)
             }
         }
     }
@@ -368,7 +274,6 @@ fun ShowPhoneQrCard(
 fun PairWithMacQrCard(
     qrInput: String,
     onQrInputChange: (String) -> Unit,
-    onLoadSimulated: () -> Unit,
     onPair: () -> Unit,
     statusMessage: String?,
     isSuccessStatus: Boolean
@@ -389,7 +294,7 @@ fun PairWithMacQrCard(
                 color = Color.White
             )
             Text(
-                text = "Paste the pairing URI shown on the Mac menu bar app.",
+                text = "Paste the complete macbridge:// pairing code printed by the Mac companion. It expires after 5 minutes.",
                 fontSize = 12.sp,
                 color = Slate400
             )
@@ -433,14 +338,7 @@ fun PairWithMacQrCard(
                     Text("Paste", color = Slate200, fontSize = 12.sp)
                 }
 
-                OutlinedButton(
-                    onClick = onLoadSimulated,
-                    modifier = Modifier.weight(1.2f).testTag("load_demo_qr_button"),
-                    shape = RoundedCornerShape(8.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, CyanNeon.copy(alpha = 0.5f))
-                ) {
-                    Text("Load Mac Demo QR", color = CyanNeon, fontSize = 12.sp)
-                }
+
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -454,7 +352,7 @@ fun PairWithMacQrCard(
             ) {
                 Icon(Icons.Default.Security, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Pin Certificate & Pair", color = Color(0xFF0F172A), fontWeight = FontWeight.Bold)
+                Text("Verify Identity & Pair", color = Color(0xFF0F172A), fontWeight = FontWeight.Bold)
             }
 
             if (statusMessage != null) {

@@ -8,66 +8,24 @@ data class SecurityRule(
     val technicalAudit: String
 )
 
+/** Implementation status, not an independent or runtime security audit. */
 object SecurityBaselineAuditor {
-
-    fun getAuditRules(): List<SecurityRule> {
-        return listOf(
-            SecurityRule(
-                ruleNumber = 1,
-                title = "No Custom Crypto",
-                description = "Platform TLS 1.3 with mutual authentication and pinned certificates, nothing hand-rolled.",
-                isCompliant = true,
-                technicalAudit = "TLS 1.3 mutual auth enabled. Socket connections strictly pin remote SHA-256 certificate fingerprints."
-            ),
-            SecurityRule(
-                ruleNumber = 2,
-                title = "Discovery is Untrusted",
-                description = "Anything learned from mDNS is only a hint; identity is the pinned certificate.",
-                isCompliant = true,
-                technicalAudit = "mDNS (NsdManager) resolves host:port as discovery candidate only. Handshake aborts if certificate does not match pinned record."
-            ),
-            SecurityRule(
-                ruleNumber = 3,
-                title = "Pair Out of Band",
-                description = "Pairing happens only through the QR code with one-time secret; unknown devices are refused with no 'accept anyway' prompt.",
-                isCompliant = true,
-                technicalAudit = "Out-of-band QR code payload with high-entropy pairing secret required. Connections from unpinned fingerprints are instantly dropped."
-            ),
-            SecurityRule(
-                ruleNumber = 4,
-                title = "Keys Stay Put",
-                description = "Private keys live in Android Keystore, never in files, logs or backups.",
-                isCompliant = true,
-                technicalAudit = "EC key pair created in AndroidKeyStore hardware-backed container. autoBackup rules explicitly exclude databases and keystore references."
-            ),
-            SecurityRule(
-                ruleNumber = 5,
-                title = "Treat Input as Hostile",
-                description = "Strict schema, size limit on every message, and sanitized file names.",
-                isCompliant = true,
-                technicalAudit = "Payload size enforced at 10MB limit. File names sanitized against directory traversal (../ stripped) and isolated in sandbox."
-            ),
-            SecurityRule(
-                ruleNumber = 6,
-                title = "Least Privilege",
-                description = "Each feature is a separate permission per device, off by default until enabled, revocable at any time.",
-                isCompliant = true,
-                technicalAudit = "Per-device capability switches for Clipboard, File Transfer, and Notification Mirroring stored in database records."
-            ),
-            SecurityRule(
-                ruleNumber = 7,
-                title = "Local Only",
-                description = "No cloud server and no analytics in v1; direct LAN connection only.",
-                isCompliant = true,
-                technicalAudit = "0 analytics SDKs, 0 third-party telemetry, 0 cloud endpoints. Traffic strictly bound to local Wi-Fi / loopback sockets."
-            ),
-            SecurityRule(
-                ruleNumber = 8,
-                title = "Memory-Safe Network Path",
-                description = "Kotlin and Swift only, with no C or C++ between the socket and the parser.",
-                isCompliant = true,
-                technicalAudit = "100% Kotlin Coroutines and standard Java NIO/Netty/OkHttp/TLS sockets. No JNI or native C/C++ intermediaries."
-            )
-        )
-    }
+    fun getAuditRules(): List<SecurityRule> = listOf(
+        SecurityRule(1, "Platform Cryptography", "Pinned TLS 1.2+ and signed phone identity challenges.", true,
+            "Uses SSLSocket, SHA-256 public-key pins and platform ECDSA. Phone proof runs inside TLS; this is not mutual TLS."),
+        SecurityRule(2, "Discovery is Untrusted", "Discovery never authorizes pairing.", true,
+            "A separate out-of-band Mac pairing code is required. Discovered fingerprint hints are not trusted."),
+        SecurityRule(3, "Pair Out of Band", "Pair before granting feature access.", true,
+            "Mac code has a 256-bit secret, 5-minute expiry and single successful use. Android stores the pin only after authentication."),
+        SecurityRule(4, "Keys Stay Put", "Production Android identity fails closed without Keystore.", false,
+            "Android uses Keystore with no software fallback by default. Development Mac keys use owner-only files; native Keychain storage remains to implement."),
+        SecurityRule(5, "Treat Input as Hostile", "Bounded frames and filename sanitation are implemented.", false,
+            "UTF-8 frames are limited to 1 MiB before parsing. File-transfer schema, quotas and ordering still need hardening."),
+        SecurityRule(6, "Least Privilege", "New peers start with all features disabled.", false,
+            "Incoming clipboard and files check stored peer permissions. Remaining notification and outgoing file paths still need a full permission audit."),
+        SecurityRule(7, "Local Only", "Direct connections without a relay.", false,
+            "No relay in the bridge protocol. Inherited Firebase dependencies and initialization require review before claiming zero cloud activity."),
+        SecurityRule(8, "Network Path Review", "Android Kotlin and a development Python Mac peer.", false,
+            "Native Swift Mac companion and independent protocol review remain planned. No blanket compliance assertion.")
+    )
 }

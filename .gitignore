@@ -16,3 +16,11 @@
 local.properties
 .env
 debug.keystore
+
+# Python development companion
+__pycache__/
+*.pyc
+
+# Native Mac companion build outputs
+mac/native/.build/
+mac/native/dist/
