@@ -1,0 +1,6 @@
+{
+  "name": "MacBridge",
+  "description": "Secure, self-healing Android–Mac bridge with mutual TLS 1.3 pairing, seamless clipboard sync, chunked file transfer, and notification mirroring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
