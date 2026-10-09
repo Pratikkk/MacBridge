@@ -53,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +70,10 @@ import androidx.compose.ui.unit.sp
 import com.example.manager.BridgeManager
 import com.example.model.DiscoveredPeer
 import com.example.model.PairedDevice
+import com.example.network.PairingCode
+import com.example.network.PairingQrScanner
+import com.example.network.PairingScanResult
+import kotlinx.coroutines.launch
 import com.example.ui.theme.*
 
 @Composable
@@ -113,7 +118,7 @@ fun DevicesPairingScreen(
                 color = Color.White
             )
             Text(
-                text = "Paste the one-time code from your Mac companion. The code pins the Mac identity before encrypted pairing.",
+                text = "Scan or paste the one-time code from your Mac companion, review its identity, then pair.",
                 fontSize = 12.sp,
                 color = Slate400
             )
@@ -276,10 +281,16 @@ fun PairWithMacQrCard(
     onQrInputChange: (String) -> Unit,
     onPair: () -> Unit,
     statusMessage: String?,
-    isSuccessStatus: Boolean
+    isSuccessStatus: Boolean,
+    scanCode: (suspend () -> PairingScanResult)? = null
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val scanner = remember(context) { PairingQrScanner(context) }
+    val scope = rememberCoroutineScope()
+    var scanning by remember { mutableStateOf(false) }
+    var scanMessage by remember { mutableStateOf<String?>(null) }
+    val preview = remember(qrInput) { runCatching { PairingCode.parse(qrInput) }.getOrNull()?.device }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Slate900),
@@ -294,7 +305,7 @@ fun PairWithMacQrCard(
                 color = Color.White
             )
             Text(
-                text = "Paste the complete macbridge:// pairing code printed by the Mac companion. It expires after 5 minutes.",
+                text = "Open Pair a phone on your Mac, then scan its QR or paste its code. Codes expire after 5 minutes.",
                 fontSize = 12.sp,
                 color = Slate400
             )
@@ -303,7 +314,8 @@ fun PairWithMacQrCard(
 
             OutlinedTextField(
                 value = qrInput,
-                onValueChange = onQrInputChange,
+                onValueChange = { scanMessage = null; onQrInputChange(it) },
+                enabled = !scanning,
                 placeholder = { Text("macbridge://pair?id=...&secret=...", color = Slate700, fontSize = 12.sp) },
                 modifier = Modifier.fillMaxWidth().testTag("qr_input_field"),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -324,9 +336,11 @@ fun PairWithMacQrCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedButton(
+                    enabled = !scanning,
                     onClick = {
                         val text = clipboard.getText()?.text
                         if (!text.isNullOrBlank()) {
+                            scanMessage = null
                             onQrInputChange(text)
                             Toast.makeText(context, "Pasted from clipboard", Toast.LENGTH_SHORT).show()
                         }
@@ -337,18 +351,53 @@ fun PairWithMacQrCard(
                 ) {
                     Text("Paste", color = Slate200, fontSize = 12.sp)
                 }
-
-
+                OutlinedButton(
+                    enabled = !scanning,
+                    onClick = {
+                        scanning = true
+                        scanMessage = null
+                        scope.launch {
+                            try {
+                                when (val result = scanCode?.invoke() ?: scanner.scan()) {
+                                    is PairingScanResult.Code -> {
+                                        onQrInputChange(result.value)
+                                        scanMessage = "Code scanned. Review the Mac identity below, then tap Verify Identity & Pair."
+                                    }
+                                    PairingScanResult.Cancelled -> scanMessage = "Scan cancelled. Your existing code is unchanged."
+                                    PairingScanResult.Invalid -> scanMessage = "This QR is not a valid MacBridge pairing code. Generate a new code on your Mac."
+                                    PairingScanResult.Unavailable -> scanMessage = "Scanner unavailable. Update Google Play services and try again, or paste the Mac code. First use may need internet to download the scanner."
+                                }
+                            } finally { scanning = false }
+                        }
+                    },
+                    modifier = Modifier.weight(1f).testTag("scan_mac_qr_button"),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (scanning) "Scanning…" else "Scan QR", fontSize = 12.sp)
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+            if (scanMessage != null) {
+                Text(scanMessage!!, color = Slate200, fontSize = 12.sp, modifier = Modifier.testTag("scan_status"))
+                Spacer(Modifier.height(10.dp))
+            }
+            if (preview != null) {
+                Text("${preview.name} • ${preview.lastKnownIp}:${preview.port}", color = Slate200, fontSize = 12.sp)
+                Text("Mac public-key fingerprint", color = Slate400, fontSize = 11.sp)
+                Text(preview.fingerprint, color = CyanNeon, fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace, modifier = Modifier.testTag("pairing_identity_preview"))
+                Spacer(Modifier.height(10.dp))
+            }
 
             Button(
                 onClick = onPair,
                 colors = ButtonDefaults.buttonColors(containerColor = CyanNeon),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth().testTag("confirm_pair_button"),
-                enabled = qrInput.isNotBlank()
+                enabled = preview != null && !scanning
             ) {
                 Icon(Icons.Default.Security, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))

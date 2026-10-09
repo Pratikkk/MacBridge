@@ -1,6 +1,6 @@
 # MacBridge
 
-An Android-to-Mac local-network bridge. The current milestone supports authenticated pairing, clipboard exchange, reconnecting, and a native Mac menu-bar UI.
+An Android-to-Mac local-network bridge. The current milestone supports authenticated QR or pasted-code pairing, clipboard exchange, reconnecting, and a native Mac menu-bar UI.
 
 The Android app pins the Mac TLS public key and proves its own Keystore identity with a signed challenge. Pairing codes expire after five minutes and work once. New Android peers start with sharing permissions disabled.
 
@@ -42,8 +42,16 @@ python3 -m unittest discover -s mac -v
 mac/native/test-app.sh
 ```
 
-These checks cover identity and code rejection, Unicode, bounded and malformed frames, reconnect, clipboard permission and disconnect cases, legacy phone records, desktop control recovery and shutdown, prompt status delivery, and exact QR decoding. After each feature, add relevant regression and edge-case checks, build, then commit and push to the configured GitHub remote as documented in [AGENTS.md](AGENTS.md).
+These checks cover identity and code rejection, Unicode, bounded and malformed frames, reconnect, clipboard permission and disconnect cases, legacy phone records, desktop control recovery and shutdown, prompt status delivery, exact QR decoding, Android scan cancellation and failure recovery, duplicate-scan prevention, late-result cancellation, and identical scanned/pasted identities. After each feature, add relevant regression and edge-case checks, build, then commit and push to the configured GitHub remote as documented in [AGENTS.md](AGENTS.md).
 
 ## Remaining work
 
-The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage, Android QR scanning, file transfers, notification actions, and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage, file transfers, notification actions, and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+
+## Pair by QR
+
+On Mac, click the menu-bar link icon and expand **Pair a phone**. On Android, open **Devices → Pair Mac → Scan QR**, point the camera at the Mac code, review the Mac name, address and public-key fingerprint, then tap **Verify Identity & Pair**. Scanning stages the code; pairing happens only after your tap.
+
+The scanner uses [Google Code Scanner](https://developers.google.com/ml-kit/vision/barcode-scanning/code-scanner) through Google Play services, without MacBridge requesting camera permission. First use may need internet to download the scanner module. If services or camera access are unavailable, paste the Mac code instead. Cancelling or scanning another type of QR leaves any previously entered code unchanged. Generate a fresh Mac code if the five-minute window expired or the code was already used.
+
+Automated tests use injected scanner results and verify the real pairing protocol separately. A physical-device camera scan remains a manual check: scan the Mac QR, cancel and retry, try a non-MacBridge QR, pair, then confirm clipboard exchange.
