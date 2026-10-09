@@ -1,5 +1,8 @@
 package com.example.ui.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Shapes
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -19,5 +22,8 @@ private val MonochromeScheme = darkColorScheme(
 
 @Composable
 fun MyApplicationTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = MonochromeScheme, typography = Typography, content = content)
+    MaterialTheme(colorScheme = MonochromeScheme, typography = Typography, shapes = Shapes(
+        extraSmall = RoundedCornerShape(8.dp), small = RoundedCornerShape(14.dp),
+        medium = RoundedCornerShape(18.dp), large = RoundedCornerShape(22.dp),
+        extraLarge = RoundedCornerShape(28.dp)), content = content)
 }

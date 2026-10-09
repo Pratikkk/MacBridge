@@ -62,7 +62,7 @@ fun ClipboardWorkspace(history: List<ClipboardItem>, availability: SharingUiStat
         item { ScreenTitle("Clipboard", "A little less copying. A lot more flow.") }
         item {
             Panel {
-                Text("Phone → Mac", style = MaterialTheme.typography.titleLarge)
+                FeatureHeading("Send copied text", Icons.Outlined.ContentPaste)
                 Text(availability.guidance, color = Slate400)
                 Button(onClick = onSend, enabled = availability.canSend && !sending,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("push_clipboard_button")) {
@@ -75,7 +75,7 @@ fun ClipboardWorkspace(history: List<ClipboardItem>, availability: SharingUiStat
                 }
                 if (feedback != null) Text(feedback, style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("clipboard_feedback"))
-                Text("Copy text in another app, then return here to send it. You can also share text directly to MacBridge.",
+                Text("Copy text, then return here to send it. You can also share text directly from another app.",
                     color = Slate400, style = MaterialTheme.typography.bodyMedium)
             }
         }

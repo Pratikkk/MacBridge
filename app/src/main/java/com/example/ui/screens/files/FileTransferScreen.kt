@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -32,9 +35,15 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
         item { ScreenTitle("Files", "From your phone, safely to your Mac.") }
         item {
             FileSendCard(enabled, busy, onChoose = { picker.launch(arrayOf("*/*")) }, onDevices)
-
         }
-        if (history.isEmpty()) item { Text("Your file transfers will appear here.", color = Slate400) }
+        item { Text("Recent files", style = MaterialTheme.typography.titleLarge) }
+        if (history.isEmpty()) item {
+            Panel {
+                Icon(Icons.Outlined.FolderOpen, contentDescription = null, tint = Slate400)
+                Text("Your sent files will appear here", style = MaterialTheme.typography.titleMedium)
+                Text("Choose your first document to get started.", color = Slate400)
+            }
+        }
         items(history, key = { it.transferId }) { item ->
             Panel {
                 Text(item.fileName, style = MaterialTheme.typography.titleMedium)
@@ -60,18 +69,23 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
 
 @Composable
 fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevices: () -> Unit) {
-            Panel {
-                Text("Send a document", style = MaterialTheme.typography.titleLarge)
-                Text("Choose a file up to 100 MB. On your Mac, turn on Allow file receiving. Files appear in Received Files only after verification.", color = Slate400)
-                Button(onClick = onChoose, enabled = enabled && !busy,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("choose_file_button")) {
-                    Text(if (busy) "Transfer in progress…" else "Choose file")
-                }
-                if (!enabled) {
-                    Text("Connect your Mac and turn on File sharing in Devices.", color = Slate400)
-                    TextButton(onClick = onDevices) { Text("Open Devices") }
-                }
-                Text("Phone → Mac for now. Interrupted transfers can be retried by choosing the file again.", color = Slate400,
-                    style = MaterialTheme.typography.bodyMedium)
-            }
+    Panel {
+        FeatureHeading("Send a document", Icons.Outlined.Description)
+        Text("Phone → Mac · Up to 100 MB", color = Slate400, style = MaterialTheme.typography.bodyMedium)
+        Button(onClick = onChoose, enabled = enabled && !busy,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("choose_file_button")) {
+            Text(if (busy) "Transfer in progress…" else "Choose file")
+        }
+        if (!enabled) {
+            Text("Connect your Mac and turn on File sharing in Devices.", color = Slate400,
+                style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = onDevices, modifier = Modifier.fillMaxWidth()) { Text("Open Devices") }
+        }
+        HorizontalDivider(color = Slate800)
+        Text("On your Mac", style = MaterialTheme.typography.titleMedium)
+        Text("Turn on Allow file receiving. Open Show Received Files to find your verified documents.",
+            color = Slate400, style = MaterialTheme.typography.bodyMedium)
+        Text("Interrupted? Choose the file again to retry.", color = Slate400,
+            style = MaterialTheme.typography.bodyMedium)
+    }
 }

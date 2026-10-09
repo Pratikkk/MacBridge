@@ -23,6 +23,7 @@ import com.example.ui.screens.clipboard.ClipboardWorkspace
 import com.example.ui.screens.devices.PairedDeviceItemCard
 import com.example.ui.screens.settings.SettingsContent
 import com.example.ui.screens.files.FileSendCard
+import com.example.ui.screens.ShareTabs
 import com.example.ui.theme.MyApplicationTheme
 import org.junit.Assert.*
 import org.junit.Rule
@@ -190,6 +191,34 @@ class ModernUiTest {
         compose.setContent { MyApplicationTheme { FileSendCard(true, busy, { selections++; busy = true }, {}) } }
         compose.onNodeWithTag("choose_file_button").performClick().assertIsNotEnabled()
         compose.runOnIdle { assertEquals(1, selections) }
+    }
+
+    @Test fun `Share tabs remain selectable with large text on narrow screens`() {
+        var files by mutableStateOf(false)
+        compose.setContent { MyApplicationTheme {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 1.6f)) {
+                Box(Modifier.width(320.dp)) { ShareTabs(files) { files = it } }
+            }
+        } }
+        compose.onNodeWithText("Files").performClick()
+        compose.runOnIdle { assertTrue(files) }
+        compose.onNodeWithText("Clipboard").performClick()
+        compose.runOnIdle { assertFalse(files) }
+    }
+
+    @Test fun `file recovery stays reachable with large text on narrow screens`() {
+        var routes = 0
+        compose.setContent { MyApplicationTheme {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 1.6f)) {
+                Column(Modifier.width(320.dp).height(600.dp).verticalScroll(rememberScrollState())) {
+                    FileSendCard(false, false, { fail("Cannot send offline") }, { routes++ })
+                }
+            }
+        } }
+        compose.onNodeWithTag("choose_file_button").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("Open Devices").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, routes) }
+        compose.onNodeWithText("On your Mac").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun `small screen and large text retain accessible settings navigation`() {

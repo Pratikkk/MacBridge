@@ -13,6 +13,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.*
@@ -27,7 +28,7 @@ fun ScreenTitle(title: String, subtitle: String) {
 
 @Composable
 fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp),
+    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
         color = Slate900, border = BorderStroke(1.dp, Slate800)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
@@ -43,5 +44,17 @@ fun FrostedBackdrop(modifier: Modifier = Modifier) {
             .size(170.dp).blur(40.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded).background(Color.White.copy(alpha = 0.10f), CircleShape))
         Box(Modifier.align(Alignment.BottomStart).offset(x = (-35).dp, y = 40.dp)
             .size(140.dp).blur(32.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded).background(Color.White.copy(alpha = 0.06f), CircleShape))
+    }
+}
+
+@Composable
+fun FeatureHeading(title: String, icon: ImageVector) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(color = Slate800, shape = RoundedCornerShape(14.dp)) {
+            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp))
+            }
+        }
+        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
     }
 }
