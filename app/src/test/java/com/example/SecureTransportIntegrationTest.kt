@@ -47,13 +47,15 @@ class SecureTransportIntegrationTest {
         } finally { transport.stop(); scope.cancel() }
     }
 
-    private fun withMac(test: (PairingCode) -> Unit) {
+    private lateinit var peerDirectory: File
+    private fun withMac(files: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
         val directory = Files.createTempDirectory("macbridge-integration-").toFile()
-        val process = ProcessBuilder("python3", File(root, "mac/macbridge.py").absolutePath,
+        peerDirectory = directory
+        val process = ProcessBuilder(listOf("python3", File(root, "mac/macbridge.py").absolutePath,
             "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",
-            "--address", "127.0.0.1", "--headless", "--echo").redirectErrorStream(true).start()
+            "--address", "127.0.0.1", "--headless", "--echo") + (if (files) listOf("--files") else emptyList())).redirectErrorStream(true).start()
         val executor = Executors.newSingleThreadExecutor()
         try {
             val line = executor.submit<String> { process.inputStream.bufferedReader().readLine() ?: error("Mac companion exited before startup") }
@@ -110,6 +112,38 @@ class SecureTransportIntegrationTest {
             transport.stop()
             scope.cancel()
         }
+    }
+
+    @Test
+    fun `real TLS file transfer waits for verified delivery and cancelled partial is removed`() = withMac(files = true) { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val acknowledgements = kotlinx.coroutines.channels.Channel<ProtocolMessage.FileAck>(4)
+        val transport = SecureTransport(IdentityManager(context, true), scope,
+            { message, _ -> if (message is ProtocolMessage.FileAck) acknowledgements.send(message) }, {})
+        try { runBlocking(Dispatchers.IO) {
+            transport.pairDevice(code.device, code.secret) {}
+            val bytes = ByteArray(80000) { (it % 256).toByte() }
+            val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+            assertTrue(transport.sendMessage(ProtocolMessage.FileInit("real-file", "🌉 test.bin", bytes.size.toLong(), hash)))
+            assertEquals("READY", withTimeout(5000) { acknowledgements.receive() }.status)
+            for (i in 0..1) {
+                val offset = i * 65536
+                val data = bytes.copyOfRange(offset, minOf(offset + 65536, bytes.size))
+                assertTrue(transport.sendMessage(ProtocolMessage.FileChunk("real-file", i, 2, offset.toLong(),
+                    android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP), data.size)))
+                val ack = withTimeout(5000) { acknowledgements.receive() }
+                assertEquals(if (i == 1) "COMPLETED" else "IN_PROGRESS", ack.status)
+                if (i == 1) assertEquals(hash, ack.sha256Checksum)
+            }
+            val folder = File(peerDirectory, "ReceivedFiles")
+            assertArrayEquals(bytes, folder.listFiles()!!.single().readBytes())
+            transport.sendMessage(ProtocolMessage.FileInit("cancel-file", "cancel.bin", bytes.size.toLong(), hash))
+            assertEquals("READY", withTimeout(5000) { acknowledgements.receive() }.status)
+            transport.sendMessage(ProtocolMessage.FileCancel("cancel-file"))
+            assertEquals("CANCELLED", withTimeout(5000) { acknowledgements.receive() }.status)
+            assertEquals(1, folder.listFiles()!!.size)
+        } } finally { transport.stop(); scope.cancel() }
     }
 
     @Test

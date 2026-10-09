@@ -1,6 +1,6 @@
 # MacBridge
 
-An Android-to-Mac local-network bridge. The current milestone supports authenticated QR or pasted-code pairing, clipboard exchange, reconnecting, and a native Mac menu-bar UI.
+An Android-to-Mac local-network bridge. The current milestone supports authenticated QR or pasted-code pairing, clipboard exchange, verified phone-to-Mac file sending, reconnecting, and a native Mac menu-bar UI.
 
 The Android app pins the Mac TLS public key and proves its own Keystore identity with a signed challenge. Pairing codes expire after five minutes and work once. New Android peers start with sharing permissions disabled.
 
@@ -46,7 +46,7 @@ These checks cover identity and code rejection, Unicode, bounded and malformed f
 
 ## Remaining work
 
-The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage, file transfers, notification actions, and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage, Mac-to-phone files, transfer resume, notification actions, and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
 
 ## Pair by QR
 
@@ -60,9 +60,19 @@ Automated tests use injected scanner results and verify the real pairing protoco
 
 The Android app uses a black-and-white palette with soft decorative blur behind the Home connection card. Text and controls are never blurred; older Android versions retain the gradient background.
 
-- **Home**: connection status, pair/connect/cancel, clipboard sending and a shortcut to history. If several Macs are saved, choose one in Devices.
-- **Clipboard**: send current phone text, instructions for receiving Mac text, and local history with copy, expand and confirmed clearing. Send actions are disabled when disconnected, blocked, in demo mode or when the latest stored sharing permission is off.
-- **Devices**: paired Macs first, clipboard sharing permission, connect/disconnect, identity disclosure and confirmed removal. Scan or paste to add another Mac.
-- **Settings**: sharing permissions, Android battery settings, security diagnostics and a clearly labelled roadmap for unfinished file/notification features. Prototype simulator and benchmark actions are outside the everyday navigation.
+- **Home**: connection status, pair/connect/cancel, clipboard sending and a shortcut to Share. If several Macs are saved, choose one in Devices.
+- **Share**: Clipboard and Files tabs. Choose a document to send to the Mac with verified progress and cancellation, or send current phone text, instructions for receiving Mac text, and local history with copy, expand and confirmed clearing. Send actions are disabled when disconnected, blocked, in demo mode or when the latest stored sharing permission is off.
+- **Devices**: paired Macs first, clipboard and file sharing permissions, connect/disconnect, identity disclosure and confirmed removal. Scan or paste to add another Mac.
+- **Settings**: sharing permissions, Android battery settings, security diagnostics and a clearly labelled roadmap for unfinished notification features. Prototype simulator and benchmark actions are outside the everyday navigation.
 
 The selected tab and scroll positions survive recreation; pairing secrets stay in memory only. Navigation disposes pending scanner callbacks. Automated UI checks cover offline/reconnecting states, revoked permissions, multiple Macs, confirmations, navigation restoration, blocked peers and narrow screens with enlarged text.
+
+## Send a file to your Mac
+
+Enable **Devices → File sharing** for the chosen Mac on Android and **Allow file receiving** in the Mac menu-bar companion. Receiving starts off on the Mac and its toggle is saved across restarts. Open **Share → Files → Choose a file**, then select a document with the system picker. Files are limited to 100 MB; only one outgoing transfer runs at a time.
+
+The app takes a bounded private snapshot, sends 64 KB chunks over the authenticated TLS session and waits for each acknowledgement. It marks a transfer complete only when the Mac confirms the exact byte count and SHA-256 checksum. Zero-byte files are supported. The Mac saves verified files in `~/Library/Application Support/MacBridgeDev/ReceivedFiles`; **Show Received Files** opens that folder. Files are never opened automatically.
+
+Cancellation, disconnect, permission revocation and shutdown remove unverified Mac partial files; startup clears interrupted partials after a process crash. Android clears temporary snapshots and marks interrupted history entries failed on restart. Completed files remain. Failed or cancelled transfers can be retried by choosing the document again; resume and Mac-to-phone sending are future work. This milestone uses the in-app picker; Android file share-sheet intents direct you to Share → Files.
+
+File tests cover normal multi-chunk and empty transfers, Unicode names, checksum rejection, ordering and malformed chunks, oversized documents (including unknown sizes), unrelated-peer acknowledgements, revoked document access, disabled sharing, timeouts, disconnects, cancellation, duplicate names, disk-space rejection and shutdown/restart cleanup. The Android-to-Python integration test verifies actual TLS delivery and cancellation against an isolated receive folder.

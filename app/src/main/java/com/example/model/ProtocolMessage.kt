@@ -64,8 +64,11 @@ sealed class ProtocolMessage(val type: String) {
     data class FileAck(
         val transferId: String,
         val receivedBytes: Long,
-        val status: String // "IN_PROGRESS", "COMPLETED", "VERIFICATION_FAILED", "RETRY_CHUNK"
+        val status: String,
+        val sha256Checksum: String? = null
     ) : ProtocolMessage("FILE_ACK")
+
+    data class FileCancel(val transferId: String) : ProtocolMessage("FILE_CANCEL")
 
     data class NotificationMirror(
         val notificationId: String,

@@ -270,6 +270,15 @@ fun PairedDeviceItemCard(device: PairedDevice, onConnect: () -> Unit, onUnpair: 
                 onCheckedChange = { onPermissionsChange(it, device.allowFileTransfer, device.allowNotifications) },
                 modifier = Modifier.testTag("clipboard_permission_${device.id}"))
         }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("File sharing", style = MaterialTheme.typography.titleMedium)
+                Text("Send documents to this Mac.", color = Slate400, style = MaterialTheme.typography.bodyMedium)
+            }
+            Switch(checked = device.allowFileTransfer, enabled = !device.isBlocked,
+                onCheckedChange = { onPermissionsChange(device.allowClipboard, it, device.allowNotifications) },
+                modifier = Modifier.testTag("file_permission_${device.id}"))
+        }
         TextButton(onClick = { identityExpanded = !identityExpanded }) { Text(if (identityExpanded) "Hide identity" else "View Mac identity") }
         if (identityExpanded) Text(device.fingerprint, style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace, color = Slate400)

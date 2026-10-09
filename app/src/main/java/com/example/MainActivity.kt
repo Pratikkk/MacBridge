@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
                 val result = bridgeManager.sendSharedText(sharedText)
                 val message = when (result) {
                     TextSendResult.SENT -> "Shared text sent to Mac"
-                    TextSendResult.EMPTY_TEXT -> "No text to share. File sharing is not available yet."
+                    TextSendResult.EMPTY_TEXT -> "No text to share. To send a file, open Share → Files and choose it."
                     TextSendResult.NOT_CONNECTED -> "Connect to your Mac before sharing text"
                     TextSendResult.PERMISSION_DENIED -> "Enable clipboard sharing for this Mac in Devices"
                     TextSendResult.SEND_FAILED -> "Could not send text. Check your Mac connection and try again."

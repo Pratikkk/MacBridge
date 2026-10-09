@@ -28,7 +28,6 @@ fun BridgeHomeScreen(bridgeManager: BridgeManager, onNavigateToPairing: () -> Un
     val context = LocalContext.current
     val state by bridgeManager.secureTransport.connectionState.collectAsState()
     val devices by bridgeManager.pairedDevices.collectAsState()
-    val history by bridgeManager.clipboardHistory.collectAsState()
     var sending by remember { mutableStateOf(false) }
     val availability = sharingUiState(state, devices)
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -59,7 +58,7 @@ fun BridgeHomeScreen(bridgeManager: BridgeManager, onNavigateToPairing: () -> Un
         }
         OutlinedButton(onClick = onNavigateToClipboard, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             shape = RoundedCornerShape(18.dp)) {
-            Text("Clipboard history · ${history.size}")
+            Text("Open Share · Clipboard & files")
         }
         Text("Just your devices, on your local network.", style = MaterialTheme.typography.bodyMedium, color = Slate400)
         Spacer(Modifier.height(8.dp))

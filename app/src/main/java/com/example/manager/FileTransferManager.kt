@@ -2,241 +2,168 @@ package com.example.manager
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Base64
 import com.example.data.FileTransferDao
-import com.example.model.FileTransferItem
-import com.example.model.ProtocolMessage
-import com.example.model.TransferDirection
-import com.example.model.TransferStatus
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import com.example.model.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Phase 5: File Transfer.
- * Chunks files into 64KB streams over the encrypted link.
- * Enforces strict filename sanitization against path traversal attacks.
- * Verifies SHA-256 hash checksums on completion.
- */
+private class TransferFailure(val explanation: String) : Exception()
+private fun insist(value: Boolean, message: () -> String) { if (!value) throw TransferFailure(message()) }
+
+const val FILE_CHUNK_SIZE = 65536
+const val MAX_FILE_BYTES = 100L * 1024 * 1024
+
+data class FileTransferTarget(val device: PairedDevice, val session: Long)
+
+/** Stream a bounded private snapshot of a selected document, waiting for each Mac acknowledgement. */
 class FileTransferManager(
     private val context: Context,
     private val fileTransferDao: FileTransferDao,
     private val scope: CoroutineScope,
-    private val sendProtocolMessage: (ProtocolMessage) -> Boolean
+    private val target: suspend () -> FileTransferTarget?,
+    private val send: suspend (ProtocolMessage, FileTransferTarget) -> Boolean,
+    private val ackTimeoutMs: Long = 15000
 ) {
-    private val TAG = "FileTransferManager"
-    private val receiveDirectory = File(context.filesDir, "received_files").apply { mkdirs() }
-
-    private val activeTransfers = mutableMapOf<String, Job>()
-    private val activeStreams = mutableMapOf<String, FileOutputStream>()
-    private val digestMap = mutableMapOf<String, MessageDigest>()
-
-    private val _currentTransferProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
-    val currentTransferProgress: StateFlow<Map<String, Float>> = _currentTransferProgress.asStateFlow()
-
-    /**
-     * Security Baseline Rule 5: Sanitize filenames against directory traversal.
-     * Prevents '../', null bytes, and absolute paths.
-     */
-    fun sanitizeFileName(rawName: String): String {
-        var clean = rawName
-            .replace("\\", "/")
-            .substringAfterLast("/")
-            .replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
-            .trim()
-
-        if (clean.isBlank() || clean.startsWith(".")) {
-            clean = "download_${System.currentTimeMillis()}.bin"
-        }
-        return clean
+    private val spool = File(context.cacheDir, "outgoing_transfers")
+    private val initialized = scope.async(Dispatchers.IO) {
+        spool.mkdirs()
+        spool.listFiles()?.filter { it.name.startsWith("transfer-") && it.name.endsWith(".part") }?.forEach { it.delete() }
+        fileTransferDao.failInterruptedOutgoing()
     }
+    private val occupied = AtomicBoolean(false)
+    private val acknowledgements = ConcurrentHashMap<String, Channel<ProtocolMessage.FileAck>>()
+    @Volatile private var activeJob: Job? = null
+    @Volatile private var activeId: String? = null
+    private val busyState = MutableStateFlow(false)
+    val busy = busyState.asStateFlow()
 
-    fun handleIncomingInit(initMsg: ProtocolMessage.FileInit) {
-        scope.launch(Dispatchers.IO) {
-            val safeName = sanitizeFileName(initMsg.fileName)
-            val targetFile = File(receiveDirectory, safeName)
-
-            DiagnosticLogger.i(TAG, "Incoming file transfer: ${initMsg.fileName} (sanitized to: $safeName, ${initMsg.fileSize} bytes)")
-
-            val item = FileTransferItem(
-                transferId = initMsg.transferId,
-                fileName = safeName,
-                fileSize = initMsg.fileSize,
-                transferredBytes = 0,
-                direction = TransferDirection.INCOMING,
-                status = TransferStatus.TRANSFERRING,
-                sha256Checksum = initMsg.sha256Checksum,
-                filePath = targetFile.absolutePath
-            )
-            fileTransferDao.insertOrUpdate(item)
-
-            try {
-                activeStreams[initMsg.transferId] = FileOutputStream(targetFile)
-                digestMap[initMsg.transferId] = MessageDigest.getInstance("SHA-256")
-            } catch (e: Exception) {
-                DiagnosticLogger.e(TAG, "Failed to initialize incoming file: ${e.message}")
-            }
-        }
+    fun handleAck(message: ProtocolMessage.FileAck, deviceId: String) {
+        val value = expectedPeer
+        if (value == deviceId) acknowledgements[message.transferId]?.trySend(message)
     }
+    @Volatile private var expectedPeer: String? = null
 
-    fun handleIncomingChunk(chunk: ProtocolMessage.FileChunk) {
-        scope.launch(Dispatchers.IO) {
-            val out = activeStreams[chunk.transferId] ?: return@launch
-            val md = digestMap[chunk.transferId] ?: return@launch
-
+    fun sendFile(uri: Uri): Boolean {
+        if (!occupied.compareAndSet(false, true)) return false
+        busyState.value = true
+        val id = "file-v1-" + UUID.randomUUID().toString()
+        activeId = id
+        val ack = Channel<ProtocolMessage.FileAck>(4)
+        acknowledgements[id] = ack
+        activeJob = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            var item = FileTransferItem(id, "Selected document", 0, direction = TransferDirection.OUTGOING,
+                status = TransferStatus.PENDING, sha256Checksum = "")
+            var destination: FileTransferTarget? = null
+            var snapshot: File? = null
+            var complete = false
+            var offered = false
             try {
-                val bytes = Base64.decode(chunk.dataBase64, Base64.NO_WRAP)
-                out.write(bytes)
-                md.update(bytes)
-
-                val existing = fileTransferDao.getTransfer(chunk.transferId)
-                if (existing != null) {
-                    val updatedBytes = (chunk.offset + bytes.size).coerceAtMost(existing.fileSize)
-                    val progress = if (existing.fileSize > 0) updatedBytes.toFloat() / existing.fileSize else 1f
-
-                    val updatedMap = _currentTransferProgress.value.toMutableMap()
-                    updatedMap[chunk.transferId] = progress
-                    _currentTransferProgress.value = updatedMap
-
-                    val isComplete = chunk.chunkIndex >= chunk.totalChunks - 1 || updatedBytes >= existing.fileSize
-                    if (isComplete) {
-                        out.flush()
-                        out.close()
-                        activeStreams.remove(chunk.transferId)
-
-                        val computedDigest = md.digest().joinToString("") { "%02x".format(it) }
-                        val verified = computedDigest.equals(existing.sha256Checksum, ignoreCase = true)
-
-                        val finalStatus = if (verified) TransferStatus.COMPLETED else TransferStatus.FAILED
-                        val error = if (verified) null else "SHA-256 hash verification failed: expected ${existing.sha256Checksum}, got $computedDigest"
-
-                        if (verified) {
-                            DiagnosticLogger.i(TAG, "File ${existing.fileName} received & verified successfully! SHA-256 matched.")
-                        } else {
-                            DiagnosticLogger.e(TAG, "File ${existing.fileName} failed integrity verification!")
-                        }
-
-                        fileTransferDao.insertOrUpdate(
-                            existing.copy(
-                                transferredBytes = updatedBytes,
-                                status = finalStatus,
-                                calculatedChecksum = computedDigest,
-                                errorMessage = error
-                            )
-                        )
-                        digestMap.remove(chunk.transferId)
-                    } else {
-                        fileTransferDao.insertOrUpdate(
-                            existing.copy(
-                                transferredBytes = updatedBytes,
-                                status = TransferStatus.TRANSFERRING
-                            )
-                        )
+                initialized.await()
+                fileTransferDao.insertOrUpdate(item)
+                destination = target() ?: throw TransferFailure("Connect to your Mac and enable File sharing in Devices.")
+                expectedPeer = destination.device.id
+                val resolver = context.contentResolver
+                insist(uri.scheme == "content") { "Choose a document with the system file picker." }
+                var name = "document"
+                resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (index >= 0 && !cursor.isNull(index)) name = cursor.getString(index)
+                        val size = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (size >= 0 && !cursor.isNull(size)) insist(cursor.getLong(size) <= MAX_FILE_BYTES) { "Files must be 100 MB or smaller." }
                     }
                 }
-            } catch (e: Exception) {
-                DiagnosticLogger.e(TAG, "Error processing incoming chunk: ${e.message}")
-            }
-        }
-    }
-
-    fun sendTestFile(sizeBytes: Long = 1024 * 1024, fileName: String = "Test_Benchmark_1MB.bin") {
-        scope.launch(Dispatchers.IO) {
-            val transferId = UUID.randomUUID().toString()
-            val dummyBytes = ByteArray(sizeBytes.toInt()) { (it % 256).toByte() }
-            val md = MessageDigest.getInstance("SHA-256")
-            val sha256 = md.digest(dummyBytes).joinToString("") { "%02x".format(it) }
-
-            val item = FileTransferItem(
-                transferId = transferId,
-                fileName = fileName,
-                fileSize = sizeBytes,
-                transferredBytes = 0,
-                direction = TransferDirection.OUTGOING,
-                status = TransferStatus.TRANSFERRING,
-                sha256Checksum = sha256
-            )
-            fileTransferDao.insertOrUpdate(item)
-
-            // Send Init
-            val initMsg = ProtocolMessage.FileInit(
-                transferId = transferId,
-                fileName = fileName,
-                fileSize = sizeBytes,
-                sha256Checksum = sha256
-            )
-            sendProtocolMessage(initMsg)
-
-            // Stream chunks
-            val chunkSize = 64 * 1024
-            val totalChunks = ((sizeBytes + chunkSize - 1) / chunkSize).toInt()
-
-            val job = launch(Dispatchers.IO) {
-                for (i in 0 until totalChunks) {
-                    if (!isActive) break
-                    val offset = i * chunkSize
-                    val length = (sizeBytes.toInt() - offset).coerceAtMost(chunkSize)
-                    val chunkData = dummyBytes.copyOfRange(offset, offset + length)
-                    val b64 = Base64.encodeToString(chunkData, Base64.NO_WRAP)
-
-                    val chunkMsg = ProtocolMessage.FileChunk(
-                        transferId = transferId,
-                        chunkIndex = i,
-                        totalChunks = totalChunks,
-                        offset = offset.toLong(),
-                        dataBase64 = b64,
-                        chunkLength = length
-                    )
-                    sendProtocolMessage(chunkMsg)
-
-                    val sentBytes = (offset + length).toLong()
-                    val progress = sentBytes.toFloat() / sizeBytes
-                    val map = _currentTransferProgress.value.toMutableMap()
-                    map[transferId] = progress
-                    _currentTransferProgress.value = map
-
-                    fileTransferDao.insertOrUpdate(
-                        item.copy(transferredBytes = sentBytes, status = TransferStatus.TRANSFERRING)
-                    )
-                    delay(50) // simulate transmission delay
+                name = name.replace('\\', '/').substringAfterLast('/').filter { !it.isISOControl() }.take(100).ifBlank { "document" }
+                snapshot = File.createTempFile("transfer-", ".part", spool)
+                val digest = MessageDigest.getInstance("SHA-256")
+                var count = 0L
+                resolver.openInputStream(uri)?.use { source ->
+                    snapshot.outputStream().use { out ->
+                        val buffer = ByteArray(FILE_CHUNK_SIZE)
+                        while (true) {
+                            ensureActive()
+                            val length = source.read(buffer)
+                            if (length < 0) break
+                            if (length == 0) continue
+                            count += length
+                            insist(count <= MAX_FILE_BYTES) { "Files must be 100 MB or smaller." }
+                            digest.update(buffer, 0, length)
+                            out.write(buffer, 0, length)
+                        }
+                    }
+                } ?: throw TransferFailure("Cannot read this document. Choose it again.")
+                val checksum = digest.digest().joinToString("") { "%02x".format(it) }
+                item = item.copy(fileName = name, fileSize = count, sha256Checksum = checksum, status = TransferStatus.TRANSFERRING)
+                fileTransferDao.insertOrUpdate(item)
+                insist(send(ProtocolMessage.FileInit(id, name, count, checksum), destination)) { "Connection or File sharing permission changed." }
+                offered = true
+                suspend fun nextAck(expectedBytes: Long, status: String) {
+                    val response = withTimeout(ackTimeoutMs) { ack.receive() }
+                    insist(response.status == status && response.receivedBytes == expectedBytes) {
+                        if (response.status == "REJECTED") "Mac file receiving is off. Enable it in the Mac companion." else "The Mac rejected or could not verify this transfer. Try again."
+                    }
+                    if (status == "COMPLETED") insist(response.sha256Checksum == checksum) { "Mac checksum verification failed." }
                 }
-
-                fileTransferDao.insertOrUpdate(
-                    item.copy(
-                        transferredBytes = sizeBytes,
-                        status = TransferStatus.COMPLETED,
-                        calculatedChecksum = sha256
-                    )
-                )
-                DiagnosticLogger.i(TAG, "Sent file $fileName complete with verified SHA-256 checksum!")
+                nextAck(0, if (count == 0L) "COMPLETED" else "READY")
+                snapshot.inputStream().use { source ->
+                    var offset = 0L
+                    var index = 0
+                    val total = ((count + FILE_CHUNK_SIZE - 1) / FILE_CHUNK_SIZE).toInt()
+                    while (offset < count) {
+                        ensureActive()
+                        val bytes = ByteArray(minOf(FILE_CHUNK_SIZE.toLong(), count - offset).toInt())
+                        var read = 0
+                        while (read < bytes.size) {
+                            val n = source.read(bytes, read, bytes.size - read)
+                            insist(n > 0) { "Document snapshot became unreadable." }
+                            read += n
+                        }
+                        insist(send(ProtocolMessage.FileChunk(id, index++, total, offset,
+                            Base64.encodeToString(bytes, Base64.NO_WRAP), bytes.size), destination)) { "Connection or File sharing permission changed." }
+                        offset += bytes.size
+                        nextAck(offset, if (offset == count) "COMPLETED" else "IN_PROGRESS")
+                        item = item.copy(transferredBytes = offset)
+                        fileTransferDao.insertOrUpdate(item)
+                    }
+                }
+                item = item.copy(status = TransferStatus.COMPLETED, calculatedChecksum = checksum)
+                fileTransferDao.insertOrUpdate(item)
+                complete = true
+            } catch (error: Exception) {
+                val message = when (error) {
+                    is TimeoutCancellationException -> "Mac did not confirm the transfer. Update the companion, enable file receiving, and try again."
+                    is CancellationException -> "Cancelled. Any unverified partial file is removed."
+                    is SecurityException -> "Document access was revoked. Choose the file again."
+                    is TransferFailure -> error.explanation
+                    else -> "Could not read or send this file. Check the connection, free space and document access."
+                }
+                withContext(NonCancellable + Dispatchers.IO) {
+                    fileTransferDao.insertOrUpdate(item.copy(status = TransferStatus.FAILED, errorMessage = message))
+                }
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    if (!complete && offered && destination != null) runCatching { send(ProtocolMessage.FileCancel(id), destination) }
+                    snapshot?.delete()
+                    acknowledgements.remove(id)?.close()
+                    expectedPeer = null
+                    activeId = null
+                    busyState.value = false
+                    occupied.set(false)
+                }
             }
-            activeTransfers[transferId] = job
         }
+        activeJob!!.start()
+        return true
     }
 
-    fun cancelTransfer(transferId: String) {
-        activeTransfers[transferId]?.cancel()
-        activeTransfers.remove(transferId)
-        try { activeStreams[transferId]?.close() } catch (_: Exception) {}
-        activeStreams.remove(transferId)
-        digestMap.remove(transferId)
-
-        scope.launch(Dispatchers.IO) {
-            val item = fileTransferDao.getTransfer(transferId)
-            if (item != null) {
-                fileTransferDao.insertOrUpdate(item.copy(status = TransferStatus.FAILED, errorMessage = "Cancelled by user"))
-            }
-        }
-    }
+    fun cancelTransfer(transferId: String) { if (activeId == transferId) activeJob?.cancel() }
 }

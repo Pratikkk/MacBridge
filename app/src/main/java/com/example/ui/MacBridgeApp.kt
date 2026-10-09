@@ -19,14 +19,14 @@ import androidx.compose.ui.unit.dp
 import com.example.manager.BridgeManager
 import com.example.model.ConnectionState
 import com.example.ui.screens.bridge.BridgeHomeScreen
-import com.example.ui.screens.clipboard.ClipboardScreen
+import com.example.ui.screens.ShareScreen
 import com.example.ui.screens.devices.DevicesPairingScreen
 import com.example.ui.screens.settings.SettingsScreen
 import com.example.ui.theme.*
 
 enum class NavigationDestination(val label: String, val icon: ImageVector, val tag: String) {
     HOME("Home", Icons.Outlined.Home, "nav_bridge"),
-    CLIPBOARD("Clipboard", Icons.Outlined.ContentCopy, "nav_clipboard"),
+    CLIPBOARD("Share", Icons.Outlined.ContentCopy, "nav_clipboard"),
     DEVICES("Devices", Icons.Outlined.Devices, "nav_devices"),
     SETTINGS("Settings", Icons.Outlined.Settings, "nav_settings")
 }
@@ -39,8 +39,8 @@ fun MacBridgeApp(bridgeManager: BridgeManager) {
             NavigationDestination.HOME -> BridgeHomeScreen(bridgeManager,
                 onNavigateToPairing = { navigate(NavigationDestination.DEVICES) },
                 onNavigateToClipboard = { navigate(NavigationDestination.CLIPBOARD) })
-            NavigationDestination.CLIPBOARD -> ClipboardScreen(bridgeManager,
-                onManageDevices = { navigate(NavigationDestination.DEVICES) })
+            NavigationDestination.CLIPBOARD -> ShareScreen(bridgeManager,
+                onDevices = { navigate(NavigationDestination.DEVICES) })
             NavigationDestination.DEVICES -> DevicesPairingScreen(bridgeManager)
             NavigationDestination.SETTINGS -> SettingsScreen(bridgeManager,
                 onDevices = { navigate(NavigationDestination.DEVICES) })

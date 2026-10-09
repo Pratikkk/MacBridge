@@ -84,7 +84,19 @@ class BridgeManager(
             context = context,
             fileTransferDao = database.fileTransferDao(),
             scope = scope,
-            sendProtocolMessage = { secureTransport.sendMessage(it) }
+            target = {
+                val state = secureTransport.connectionState.value as? ConnectionState.Connected
+                val saved = state?.let { database.pairedDeviceDao().getDeviceById(it.device.id) }
+                if (state == null || state.isSimulated || saved == null || saved.isBlocked || !saved.allowFileTransfer) null
+                else FileTransferTarget(saved, state.connectedSince)
+            },
+            send = { message, destination ->
+                val state = secureTransport.connectionState.value as? ConnectionState.Connected
+                val saved = database.pairedDeviceDao().getDeviceById(destination.device.id)
+                if (state?.device?.id != destination.device.id || state.connectedSince != destination.session ||
+                    saved == null || saved.isBlocked || (!saved.allowFileTransfer && message !is ProtocolMessage.FileCancel)) false
+                else secureTransport.sendMessage(message, destination.device.id)
+            }
         )
 
         macSimulator = MacSimulatorBench(
@@ -240,17 +252,7 @@ class BridgeManager(
                     DiagnosticLogger.w(TAG, "Clipboard sync blocked by per-device permission")
                 }
             }
-            is ProtocolMessage.FileInit -> {
-                val allowed = device.allowFileTransfer
-                if (allowed) {
-                    fileTransferManager.handleIncomingInit(msg)
-                } else {
-                    DiagnosticLogger.w(TAG, "File transfer blocked by per-device permission")
-                }
-            }
-            is ProtocolMessage.FileChunk -> {
-                if (device.allowFileTransfer) fileTransferManager.handleIncomingChunk(msg)
-            }
+            is ProtocolMessage.FileAck -> fileTransferManager.handleAck(msg, device.id)
             is ProtocolMessage.NotificationAction -> {
                 if (device.allowNotifications && msg.actionType == "DISMISS") {
                     scope.launch(Dispatchers.IO) {

@@ -62,6 +62,9 @@ interface FileTransferDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(transfer: FileTransferItem)
 
+    @Query("UPDATE file_transfers SET status = 'FAILED', errorMessage = 'Interrupted. Choose the file to retry.' WHERE direction = 'OUTGOING' AND status IN ('PENDING', 'TRANSFERRING')")
+    suspend fun failInterruptedOutgoing()
+
     @Query("DELETE FROM file_transfers WHERE transferId = :transferId")
     suspend fun deleteById(transferId: String)
 }

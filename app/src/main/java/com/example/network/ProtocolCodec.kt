@@ -70,7 +70,9 @@ object ProtocolCodec {
                 json.put("transferId", message.transferId)
                 json.put("receivedBytes", message.receivedBytes)
                 json.put("status", message.status)
+                message.sha256Checksum?.let { json.put("sha256Checksum", it) }
             }
+            is ProtocolMessage.FileCancel -> json.put("transferId", message.transferId)
             is ProtocolMessage.NotificationMirror -> {
                 json.put("notificationId", message.notificationId)
                 json.put("packageName", message.packageName)
@@ -156,8 +158,10 @@ object ProtocolCodec {
                 "FILE_ACK" -> ProtocolMessage.FileAck(
                     transferId = json.getString("transferId"),
                     receivedBytes = json.getLong("receivedBytes"),
-                    status = json.getString("status")
+                    status = json.getString("status"),
+                    sha256Checksum = if (json.has("sha256Checksum")) json.getString("sha256Checksum") else null
                 )
+                "FILE_CANCEL" -> ProtocolMessage.FileCancel(json.getString("transferId"))
                 "NOTIFICATION" -> ProtocolMessage.NotificationMirror(
                     notificationId = json.getString("notificationId"),
                     packageName = json.getString("packageName"),

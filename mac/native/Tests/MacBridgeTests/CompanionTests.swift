@@ -22,6 +22,11 @@ struct CompanionChecks {
         try require(values[1].message == "No connected phone", "Error did not decode")
         print("PASS: split UTF-8 and batched status events")
 
+        var permission = EventBuffer()
+        let fileState = try permission.append(Data("{\"event\":\"state\",\"filesEnabled\":true}\n".utf8))
+        try require(fileState.first?.filesEnabled == true, "File receiving permission did not decode")
+        print("PASS: file receiving permission status")
+
         let pipe = Pipe()
         let delivered = DispatchSemaphore(value: 0)
         let ended = DispatchSemaphore(value: 0)

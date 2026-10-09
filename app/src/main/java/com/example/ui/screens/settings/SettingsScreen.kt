@@ -57,8 +57,8 @@ fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: ()
         }
         Text("On the roadmap", style = MaterialTheme.typography.titleLarge)
         Panel {
-            Text("File sharing · Coming later", style = MaterialTheme.typography.titleMedium)
-            Text("Send real files between your phone and Mac.", color = Slate400)
+            Text("File sharing · Available in Share", style = MaterialTheme.typography.titleMedium)
+            Text("Send phone documents to your Mac with verified delivery.", color = Slate400)
             HorizontalDivider(color = Slate800)
             Text("Notification mirroring · Coming later", style = MaterialTheme.typography.titleMedium)
             Text("View and manage phone notifications on your Mac.", color = Slate400)

@@ -8,6 +8,7 @@ mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 # Replace the inode rather than truncating an executable that may still be running.
 cp "$output_dir/MacBridge" "$app_dir/Contents/MacOS/MacBridge.new"
 mv -f "$app_dir/Contents/MacOS/MacBridge.new" "$app_dir/Contents/MacOS/MacBridge"
+cp ../file_receiver.py "$app_dir/Contents/Resources/file_receiver.py"
 cp ../macbridge.py "$app_dir/Contents/Resources/macbridge.py"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

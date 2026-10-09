@@ -15,6 +15,7 @@ final class CompanionController: ObservableObject {
     @Published private(set) var lastAction = "Starting companion…"
     @Published private(set) var errorMessage: String?
     @Published private(set) var clipboardEnabled = UserDefaults.standard.object(forKey: "clipboardEnabled") as? Bool ?? true
+    @Published private(set) var filesEnabled = UserDefaults.standard.bool(forKey: "filesEnabled")
     private var child: Process?
     private var input: FileHandle?
     private var generation = 0
@@ -40,7 +41,7 @@ final class CompanionController: ObservableObject {
         let stdin = Pipe()
         let stderr = Pipe()
         task.executableURL = URL(fileURLWithPath: python)
-        task.arguments = [script.path, "--gui"] + (clipboardEnabled ? ["--clipboard"] : [])
+        task.arguments = [script.path, "--gui"] + (clipboardEnabled ? ["--clipboard"] : []) + (filesEnabled ? ["--files"] : [])
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         environment["PYTHONUNBUFFERED"] = "1"
@@ -106,6 +107,7 @@ final class CompanionController: ObservableObject {
         pairingURI = value.pairingURI ?? ""
         expiresAt = Date(timeIntervalSince1970: value.expiresAt ?? 0)
         clipboardEnabled = value.clipboardEnabled ?? false
+        filesEnabled = value.filesEnabled ?? false
         lastAction = value.lastAction ?? "Ready"
         errorMessage = nil
     }
@@ -127,6 +129,19 @@ final class CompanionController: ObservableObject {
     func setClipboard(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "clipboardEnabled")
         command(["action": "setClipboardEnabled", "enabled": enabled])
+    }
+    func setFiles(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "filesEnabled")
+        command(["action": "setFilesEnabled", "enabled": enabled])
+    }
+    func showReceivedFiles() {
+        let folder = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/MacBridgeDev/ReceivedFiles", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            NSWorkspace.shared.open(folder)
+        } catch { errorMessage = "Could not open Received Files." }
     }
     func pushClipboard() { command(["action": "pushClipboard"]) }
     func newCode() { command(["action": "reissueCode"]) }

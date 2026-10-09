@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.activity.OnBackPressedDispatcherOwner
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -20,6 +22,7 @@ import com.example.ui.screens.bridge.ConnectionHeroCard
 import com.example.ui.screens.clipboard.ClipboardWorkspace
 import com.example.ui.screens.devices.PairedDeviceItemCard
 import com.example.ui.screens.settings.SettingsContent
+import com.example.ui.screens.files.FileSendCard
 import com.example.ui.theme.MyApplicationTheme
 import org.junit.Assert.*
 import org.junit.Rule
@@ -153,16 +156,16 @@ class ModernUiTest {
         var forgotten = 0
         var clipboard: Boolean? = null
         compose.setContent { MyApplicationTheme {
-            PairedDeviceItemCard(mac.copy(allowFileTransfer = true), {}, { forgotten++ }, { cb, files, alerts ->
+            Column(Modifier.verticalScroll(rememberScrollState())) { PairedDeviceItemCard(mac.copy(allowFileTransfer = true), {}, { forgotten++ }, { cb, files, alerts ->
                 clipboard = cb; assertTrue(files); assertFalse(alerts)
-            })
+            }) }
         } }
         compose.onNodeWithTag("clipboard_permission_mac1").performClick()
         compose.runOnIdle { assertEquals(false, clipboard) }
-        compose.onNodeWithTag("forget_mac_mac1").performClick()
+        compose.onNodeWithTag("forget_mac_mac1").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(0, forgotten) }
         compose.onNodeWithText("Cancel").performClick()
-        compose.onNodeWithTag("forget_mac_mac1").performClick()
+        compose.onNodeWithTag("forget_mac_mac1").performScrollTo().performClick()
         compose.onNodeWithTag("confirm_forget_mac").performClick()
         compose.runOnIdle { assertEquals(1, forgotten) }
     }
@@ -175,6 +178,20 @@ class ModernUiTest {
         compose.onNodeWithTag("clipboard_permission_mac1").assertIsNotEnabled()
     }
 
+    @Test fun `file picker is disabled until connected and permitted`() {
+        compose.setContent { MyApplicationTheme { FileSendCard(false, false, { fail("Not permitted") }, {}) } }
+        compose.onNodeWithTag("choose_file_button").assertIsNotEnabled()
+        compose.onNodeWithText("Open Devices").assertExists()
+    }
+
+    @Test fun `file send disables duplicate picker while transfer is busy`() {
+        var busy by mutableStateOf(false)
+        var selections = 0
+        compose.setContent { MyApplicationTheme { FileSendCard(true, busy, { selections++; busy = true }, {}) } }
+        compose.onNodeWithTag("choose_file_button").performClick().assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(1, selections) }
+    }
+
     @Test fun `small screen and large text retain accessible settings navigation`() {
         var details = 0
         compose.setContent { MyApplicationTheme {
@@ -184,6 +201,6 @@ class ModernUiTest {
         } }
         compose.onNodeWithTag("open_security_details").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, details) }
-        compose.onNodeWithText("File sharing · Coming later").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("File sharing · Available in Share").performScrollTo().assertIsDisplayed()
     }
 }

@@ -18,6 +18,8 @@ import time
 from urllib.parse import urlencode
 import uuid
 
+from file_receiver import FileReceiver
+
 MAX_FRAME = 1024 * 1024
 
 
@@ -74,7 +76,7 @@ def verify_signature(public_key, signature, transcript):
 
 
 class Companion:
-    def __init__(self, directory, host='0.0.0.0', port=8990, echo=False, clipboard=False, event_sink=None):
+    def __init__(self, directory, host='0.0.0.0', port=8990, echo=False, clipboard=False, event_sink=None, files=False):
         self.event_sink = event_sink
         self.address = None
         self.last_action = "Ready to connect"
@@ -104,6 +106,13 @@ class Companion:
         self.name = socket.gethostname().split('.')[0]
         self.echo = echo
         self.clipboard = clipboard
+        self.files = files
+        self.receivers = set()
+        received = self.directory / 'ReceivedFiles'
+        if received.exists() and not received.is_symlink():
+            for partial in received.glob('.incoming-*'):
+                if partial.is_file() or partial.is_symlink():
+                    partial.unlink()
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.active_socket = None
@@ -148,7 +157,7 @@ class Companion:
                 connected=self.active_id is not None,
                 phoneName=self.peers.get(self.active_id, {}).get('name', 'Android Phone'),
                 peers=[dict(id=key, name=peer.get('name', 'Android Phone')) for key, peer in sorted(self.peers.items())],
-                clipboardEnabled=self.clipboard, endpoint=f'{self.address}:{self.port}',
+                clipboardEnabled=self.clipboard, filesEnabled=self.files, endpoint=f'{self.address}:{self.port}',
                 pairingURI=self.pairing_uri(self.address) if self.address and self.secret and remaining > 0 else '',
                 expiresAt=time.time() + remaining, lastAction=self.last_action)
         self.event_sink(value)
@@ -181,6 +190,16 @@ class Companion:
             with self.lock:
                 self.clipboard = enabled
             self.report('Clipboard sharing enabled' if enabled else 'Clipboard sharing paused')
+        elif action == 'setFilesEnabled':
+            enabled = command.get('enabled')
+            if not isinstance(enabled, bool):
+                raise ValueError('File setting must be true or false')
+            with self.lock:
+                self.files = enabled
+                if not enabled:
+                    for receiver in self.receivers:
+                        receiver.abort()
+            self.report('File receiving enabled' if enabled else 'File receiving paused')
         elif action == 'disconnect':
             self.disconnect_phone()
         elif action == 'forget':
@@ -247,6 +266,7 @@ class Companion:
 
     def handle(self, raw):
         secure = None
+        receiver = FileReceiver(self.directory / "ReceivedFiles")
         try:
             raw.settimeout(10)
             secure = self.context.wrap_socket(raw, server_side=True)
@@ -263,6 +283,8 @@ class Companion:
                     if previous:
                         previous.shutdown(socket.SHUT_RDWR)
                     self.active_socket, self.active_stream, self.active_id = secure, stream, peer_id
+                with self.lock:
+                    self.receivers.add(receiver)
                 secure.settimeout(45)
                 self.report('Phone connected with verified identity')
                 while not self.stop_event.is_set():
@@ -272,6 +294,11 @@ class Companion:
                             break
                         if message.get('type') == 'HEARTBEAT' and message.get('isAck') is False:
                             write_frame(stream, dict(message, isAck=True))
+                        elif message.get('type') in ('FILE_INIT', 'FILE_CHUNK', 'FILE_CANCEL'):
+                            ack = receiver.process(message, self.files)
+                            write_frame(stream, ack)
+                            if ack['status'] == 'COMPLETED':
+                                self.report('File received and verified. Open Received Files to view it.')
                         elif message.get('type') == 'CLIPBOARD':
                             text = message.get('content')
                             if not isinstance(text, str) or message.get('mimeType') != 'text/plain':
@@ -293,6 +320,8 @@ class Companion:
             self.report(f'Connection closed ({type(error).__name__})')
         finally:
             with self.lock:
+                receiver.abort()
+                self.receivers.discard(receiver)
                 if self.active_socket is secure:
                     self.active_socket = self.active_stream = self.active_id = None
                 self.connections.discard(raw)
@@ -347,6 +376,8 @@ class Companion:
         self.stop_event.set()
         self.listener.close()
         with self.lock:
+            for receiver in self.receivers:
+                receiver.abort()
             for connection in self.connections:
                 try:
                     connection.shutdown(socket.SHUT_RDWR)
@@ -362,6 +393,7 @@ def main():
     parser.add_argument('--port', type=int, default=8990)
     parser.add_argument('--address', help='Override the automatically selected Mac LAN IP')
     parser.add_argument('--clipboard', action='store_true', help='Enable actual Mac clipboard reads and writes')
+    parser.add_argument('--files', action='store_true', help='Allow verified phone files in the private ReceivedFiles folder')
     parser.add_argument('--echo', action='store_true', help='Echo text for protocol testing without clipboard access')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--gui', action='store_true', help='JSON control channel for the native Mac app')
@@ -376,7 +408,7 @@ def main():
     def emit(value):
         with output_lock:
             print(json.dumps(value, separators=(',', ':')), flush=True)
-    companion = Companion(args.state_dir, args.host, args.port, args.echo, args.clipboard, emit if args.gui else None)
+    companion = Companion(args.state_dir, args.host, args.port, args.echo, args.clipboard, emit if args.gui else None, files=args.files)
     companion.address = address
     if args.gui:
         companion.emit_state()

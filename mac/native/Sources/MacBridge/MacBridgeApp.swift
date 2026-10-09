@@ -39,6 +39,7 @@ struct CompanionView: View {
     @State private var phoneToForget: PairedPhone?
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Image(systemName: "link")
@@ -70,6 +71,10 @@ struct CompanionView: View {
             Toggle("Allow clipboard sharing", isOn: Binding(
                 get: { controller.clipboardEnabled }, set: controller.setClipboard))
                 .disabled(!controller.running)
+            Toggle("Allow file receiving", isOn: Binding(
+                get: { controller.filesEnabled }, set: controller.setFiles))
+                .disabled(!controller.running)
+            Button("Show Received Files", action: controller.showReceivedFiles)
             Text(controller.lastAction).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let error = controller.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
@@ -93,7 +98,7 @@ struct CompanionView: View {
                             Text(controller.running ? "Generate a fresh pairing code to add a phone." : "Start the companion to generate a code.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        Text("On Android, open Devices → Pair Mac and paste the code. Both devices need the same local network. QR scanning is not available in the Android app yet.")
+                        Text("On Android, open Devices → Pair a Mac and scan this QR or paste its code. Both devices need the same local network.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         Button("Generate New Code", action: controller.newCode).disabled(!controller.running)
                     }.padding(.top, 10).frame(maxWidth: .infinity)
@@ -117,7 +122,10 @@ struct CompanionView: View {
                 Button("Quit") { NSApplication.shared.terminate(nil) }.font(.caption)
             }
         }
-        .padding(20).frame(width: 380)
+        .padding(20)
+        }
+        .frame(width: 380)
+        .frame(maxHeight: min(780, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
         .confirmationDialog("Forget this phone?", isPresented: Binding(
             get: { phoneToForget != nil }, set: { if !$0 { phoneToForget = nil } }), titleVisibility: .visible) {
             Button("Forget Phone", role: .destructive) {
