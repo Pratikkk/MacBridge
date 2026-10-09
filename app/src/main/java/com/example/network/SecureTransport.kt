@@ -22,8 +22,13 @@ class SecureTransport(
     private val identityManager: IdentityManager,
     private val scope: CoroutineScope,
     private val onMessageReceived: suspend (ProtocolMessage, PairedDevice) -> Unit,
-    private val onDeviceVerified: (PairedDevice) -> Unit
+    private val onDeviceVerified: (PairedDevice) -> Unit,
+    private val closeSocket: (SSLSocket) -> Unit = { it.close() }
 ) {
+    companion object {
+        // Cleanup must still run if the app's connection scope was cancelled.
+        private val socketCleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    }
     private val state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState = state.asStateFlow()
     private val lock = Any()
@@ -219,16 +224,21 @@ class SecureTransport(
     }
 
     fun disconnect() {
-        synchronized(lock) {
+        val sockets = synchronized(lock) {
             generation++
             connectJob?.cancel()
             connectJob = null
-            pending?.close()
+            val oldSockets = listOfNotNull(pending, session?.socket).distinct()
             pending = null
-            session?.socket?.close()
             session = null
             targetDeviceId = null
             state.value = ConnectionState.Disconnected
+            oldSockets
+        }
+        // SSLSocket.close() can send TLS close_notify over the network. Detach
+        // immediately, then close only captured sockets on IO, outside the lock.
+        if (sockets.isNotEmpty()) socketCleanup.launch {
+            sockets.forEach { socket -> runCatching { closeSocket(socket) } }
         }
     }
 

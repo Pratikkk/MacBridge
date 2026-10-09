@@ -111,7 +111,7 @@ class BridgeManager(
                 secureTransport.pairDevice(code.device, code.secret) { verified ->
                     database.pairedDeviceDao().insertOrUpdate(verified)
                 }
-                true to "Paired securely with ${code.device.name}. Enable Clipboard Sync below to share text."
+                true to "Paired securely with ${code.device.name}. Turn on Clipboard sharing below to share text."
             } catch (e: Exception) {
                 false to PairingFailure.message(e, endpoint)
             }

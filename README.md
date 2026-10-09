@@ -50,8 +50,19 @@ The native UI still uses the tested Python TLS engine. Native Swift transport, M
 
 ## Pair by QR
 
-On Mac, click the menu-bar link icon and expand **Pair a phone**. On Android, open **Devices → Pair Mac → Scan QR**, point the camera at the Mac code, review the Mac name, address and public-key fingerprint, then tap **Verify Identity & Pair**. Scanning stages the code; pairing happens only after your tap.
+On Mac, click the menu-bar link icon and expand **Pair a phone**. On Android, open **Devices → Pair a Mac → Scan QR**, point the camera at the Mac code, review the Mac name, address and public-key fingerprint, then tap **Verify Identity & Pair**. Scanning stages the code; pairing happens only after your tap.
 
 The scanner uses [Google Code Scanner](https://developers.google.com/ml-kit/vision/barcode-scanning/code-scanner) through Google Play services, without MacBridge requesting camera permission. First use may need internet to download the scanner module. If services or camera access are unavailable, paste the Mac code instead. Cancelling or scanning another type of QR leaves any previously entered code unchanged. Generate a fresh Mac code if the five-minute window expired or the code was already used.
 
 Automated tests use injected scanner results and verify the real pairing protocol separately. A physical-device camera scan remains a manual check: scan the Mac QR, cancel and retry, try a non-MacBridge QR, pair, then confirm clipboard exchange.
+
+## Android interface
+
+The Android app uses a black-and-white palette with soft decorative blur behind the Home connection card. Text and controls are never blurred; older Android versions retain the gradient background.
+
+- **Home**: connection status, pair/connect/cancel, clipboard sending and a shortcut to history. If several Macs are saved, choose one in Devices.
+- **Clipboard**: send current phone text, instructions for receiving Mac text, and local history with copy, expand and confirmed clearing. Send actions are disabled when disconnected, blocked, in demo mode or when the latest stored sharing permission is off.
+- **Devices**: paired Macs first, clipboard sharing permission, connect/disconnect, identity disclosure and confirmed removal. Scan or paste to add another Mac.
+- **Settings**: sharing permissions, Android battery settings, security diagnostics and a clearly labelled roadmap for unfinished file/notification features. Prototype simulator and benchmark actions are outside the everyday navigation.
+
+The selected tab and scroll positions survive recreation; pairing secrets stay in memory only. Navigation disposes pending scanner callbacks. Automated UI checks cover offline/reconnecting states, revoked permissions, multiple Macs, confirmations, navigation restoration, blocked peers and narrow screens with enlarged text.

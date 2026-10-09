@@ -25,6 +25,28 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class SecureTransportIntegrationTest {
+    @Test
+    fun `UI disconnect detaches immediately and TLS cleanup survives connection scope cancellation`() = withMac { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val closed = CompletableDeferred<Thread>()
+        val transport = SecureTransport(IdentityManager(context, true), scope, { _, _ -> }, {},
+            closeSocket = { socket ->
+                closed.complete(Thread.currentThread())
+                socket.close()
+            })
+        try {
+            runBlocking(Dispatchers.IO) { transport.pairDevice(code.device, code.secret) {} }
+            val caller = Thread.currentThread()
+            transport.disconnect()
+            scope.cancel()
+            assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
+            assertFalse(transport.isTargetDevice(code.device.id))
+            assertFalse(transport.sendMessage(ProtocolMessage.ClipboardSync("must not send", sourceDevice = "Test")))
+            runBlocking { assertNotSame(caller, withTimeout(5000) { closed.await() }) }
+        } finally { transport.stop(); scope.cancel() }
+    }
+
     private fun withMac(test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
