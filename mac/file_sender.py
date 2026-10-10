@@ -110,6 +110,9 @@ class FileSender:
             pass
 
     def handle_ack(self, message):
+        if message.get('transferId') == self.transfer_id and message.get('status') == 'CANCELLED' and (self.busy or self.result == 'paused'):
+            self.cancel()
+            return
         if self.busy and message.get('transferId') == self.transfer_id:
             try:
                 self.acks.put_nowait(message)

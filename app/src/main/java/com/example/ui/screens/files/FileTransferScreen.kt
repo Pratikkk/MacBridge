@@ -131,7 +131,7 @@ fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit
             TransferStatus.FAILED -> item.errorMessage ?: "Transfer failed. Send the file again to retry."
             TransferStatus.PAUSED -> if (incoming) "Paused. Reconnect and choose Resume File Sending on your Mac." else "Paused. Reconnect the same Mac to resume."
         }
-        Text(label, color = if (item.status == TransferStatus.FAILED) RoseNeon else Slate400)
+        Text(label, color = if (item.status == TransferStatus.FAILED && item.errorMessage?.startsWith("Cancelled") != true) RoseNeon else Slate400)
         if (item.status == TransferStatus.TRANSFERRING) {
             LinearProgressIndicator(progress = { if (item.fileSize > 0) (item.transferredBytes.toFloat() / item.fileSize).coerceIn(0f, 1f) else 0f },
                 modifier = Modifier.fillMaxWidth())
@@ -140,7 +140,7 @@ fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit
             OutlinedButton(onClick = onResume, enabled = canResume, modifier = Modifier.fillMaxWidth()) { Text("Resume transfer") }
         }
         if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED)) {
-            TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Cancel transfer") }
+            TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(if (item.direction == TransferDirection.INCOMING) "Cancel receiving" else "Cancel sending") }
         }
         if (incoming && verified) {
             OutlinedButton(onClick = onSave, enabled = canSave && !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)

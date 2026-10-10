@@ -57,6 +57,24 @@ class TransferRestartTest {
             assertArrayEquals(data, File(history.values["incoming-restart"]!!.filePath!!).readBytes())
         } finally { secondJob.cancelAndJoin(); clean() }
     }
+    @Test fun `cancel immediately after restart waits for checkpoint recovery and discards partial`() = runBlocking {
+        clean()
+        val history = TestFileHistory(); val firstJob = SupervisorJob(); val acks = CopyOnWriteArrayList<ProtocolMessage.FileAck>()
+        val first = receiver(history, firstJob, acks)
+        first.process(init(), peer); first.process(chunk(0), peer); firstJob.cancelAndJoin()
+        val secondJob = SupervisorJob(); val current = peer.copy(session = 2)
+        val second = receiver(history, secondJob, acks, source = current)
+        try {
+            second.cancel("incoming-restart")
+            assertEquals("CANCELLED", acks.last().status)
+            assertEquals(FILE_CHUNK_SIZE.toLong(), acks.last().receivedBytes)
+            assertTrue(history.values["incoming-restart"]!!.errorMessage!!.startsWith("Cancelled"))
+            assertTrue(File(context.filesDir, "received_files").listFiles().isNullOrEmpty())
+            second.process(init().copy(resume = true), current)
+            assertEquals("REJECTED", acks.last().status)
+        } finally { secondJob.cancelAndJoin(); clean() }
+    }
+
     @Test fun `abrupt stop recovers older checkpoint and safely retransmits uncommitted chunks`() = runBlocking {
         clean()
         val history = TestFileHistory(); val job = SupervisorJob(); val acks = CopyOnWriteArrayList<ProtocolMessage.FileAck>()

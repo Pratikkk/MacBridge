@@ -61,8 +61,8 @@ struct CompanionChecks {
         print("PASS: file sending progress and original connection identity")
 
         var receivingBuffer = EventBuffer()
-        let incoming = try receivingBuffer.append(Data(#"{"event":"state","fileReceiveStatus":"receiving","receivedBytes":65536,"receivedFileSize":80000}"#.utf8) + Data([10]))
-        try require(incoming.first?.fileReceiveStatus == "receiving" && incoming.first?.receivedBytes == 65536 && incoming.first?.receivedFileSize == 80000, "Incoming progress fields must decode")
+        let incoming = try receivingBuffer.append(Data(#"{"event":"state","fileReceiveStatus":"receiving","receivedBytes":65536,"receivedFileSize":80000,"fileReceiveToken":"opaque-transfer"}"#.utf8) + Data([10]))
+        try require(incoming.first?.fileReceiveToken == "opaque-transfer" && incoming.first?.fileReceiveStatus == "receiving" && incoming.first?.receivedBytes == 65536 && incoming.first?.receivedFileSize == 80000, "Incoming progress fields must decode")
         print("PASS: incoming transfer status and byte counts")
         let progress = TransferPresentation(status: "receiving", bytes: 65536, total: 80000)
         try require(progress.visible && progress.active && progress.detail.hasPrefix("81%"), "Incoming percentage is inaccurate")

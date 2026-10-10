@@ -43,6 +43,16 @@ class ModernUiTest {
     private val mac = PairedDevice("mac1", "My Mac", "AB:".repeat(31) + "AB", "pin", "192.168.0.2", allowClipboard = true)
     private val connected = ConnectionState.Connected(mac, mac.lastKnownIp, mac.port)
 
+    @Test fun `receiving transfer offers explicit receiving cancellation`() {
+        var cancels = 0
+        val item = com.example.model.FileTransferItem(transferId = "incoming-test", fileName = "file.bin", fileSize = 80000,
+            direction = com.example.model.TransferDirection.INCOMING, status = com.example.model.TransferStatus.TRANSFERRING,
+            transferredBytes = 65536, sha256Checksum = "hash")
+        compose.setContent { MyApplicationTheme { FileTransferCard(item, false, {}, { cancels++ }) } }
+        compose.onNodeWithText("Cancel receiving").performClick()
+        compose.runOnIdle { assertEquals(1, cancels) }
+    }
+
     @Test fun `sharing follows current stored permissions not stale session copy`() {
         assertTrue(sharingUiState(connected, listOf(mac)).canSend)
         for (devices in listOf(emptyList(), listOf(mac.copy(isBlocked = true)), listOf(mac.copy(allowClipboard = false)))) {
@@ -229,7 +239,7 @@ class ModernUiTest {
         } }
         compose.onNodeWithText("Resume transfer").assertIsNotEnabled()
         compose.onNodeWithText("Save As…").assertDoesNotExist()
-        compose.onNodeWithText("Cancel transfer").performClick()
+        compose.onNodeWithText("Cancel sending").performClick()
         compose.runOnIdle { assertEquals(1, cancels); enabled = true }
         compose.onNodeWithText("Resume transfer").performClick()
         compose.runOnIdle { assertEquals(1, resumes) }

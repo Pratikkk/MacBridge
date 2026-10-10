@@ -70,7 +70,7 @@ class FileSendingTest {
                 is ProtocolMessage.FileInit -> {
                     waiting.complete(Unit)
                     if (response != "timeout") manager.handleAck(ProtocolMessage.FileAck(message.transferId, 0,
-                        if (response == "reject") "REJECTED" else if (data.isEmpty()) "COMPLETED" else "READY",
+                        if (response == "remote-cancel") "CANCELLED" else if (response == "reject") "REJECTED" else if (data.isEmpty()) "COMPLETED" else "READY",
                         if (data.isEmpty()) message.sha256Checksum else null), if (response == "wrong-peer") "other" else "mac")
                 }
                 is ProtocolMessage.FileChunk -> {
@@ -78,7 +78,7 @@ class FileSendingTest {
                     received.write(android.util.Base64.decode(message.dataBase64, android.util.Base64.NO_WRAP))
                     val last = message.chunkIndex == message.totalChunks - 1
                     manager.handleAck(ProtocolMessage.FileAck(message.transferId, message.offset + message.chunkLength,
-                        if (last) "COMPLETED" else "IN_PROGRESS",
+                        if (response == "remote-cancel-chunk") "CANCELLED" else if (last) "COMPLETED" else "IN_PROGRESS",
                         if (last) if (response == "bad-hash") "wrong" else MessageDigest.getInstance("SHA-256").digest(received.toByteArray()).joinToString("") { "%02x".format(it) } else null), "mac")
                 }
                 is ProtocolMessage.FileCancel -> cancelled = true
@@ -101,7 +101,8 @@ class FileSendingTest {
             if (maxWrites != null) assertTrue("Too many history writes: ${history.writes.size}", history.writes.size <= maxWrites)
             if (succeeds) { assertArrayEquals(data, received.toByteArray()); assertEquals(data.size.toLong(), item.transferredBytes) }
             if (!targetAllowed || denied || oversizedStream || reportedSize != null && reportedSize > MAX_FILE_BYTES) assertEquals(0, sent)
-            if (cancel || response in listOf("reject", "bad-hash")) assertTrue(cancelled)
+            if (response.startsWith("remote-cancel")) assertTrue(item.errorMessage!!.startsWith("Cancelled by your Mac"))
+            if (cancel || response in listOf("reject", "bad-hash", "remote-cancel", "remote-cancel-chunk")) assertTrue(cancelled)
             if (paused) {
                 assertFalse(cancelled)
                 assertTrue(File(context.filesDir, "outgoing_transfers").listFiles().orEmpty().any { it.name.endsWith(".part") })
@@ -115,7 +116,8 @@ class FileSendingTest {
     @Test fun `resume uses confirmed offset original snapshot and original Mac identity`() = resumeScenario(false)
     @Test fun `lost final acknowledgement resumes receipt without duplicate chunks`() = resumeScenario(true)
     @Test fun `corrupt private snapshot is discarded before any resume frame`() = resumeScenario(false, corrupt = true)
-    private fun resumeScenario(lostFinal: Boolean, corrupt: Boolean = false) = runBlocking {
+    @Test fun `remote cancellation discards paused snapshot only for original Mac identity`() = resumeScenario(false, remoteCancel = true)
+    private fun resumeScenario(lostFinal: Boolean, corrupt: Boolean = false, remoteCancel: Boolean = false) = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val bytes = ByteArray(80000) { (it % 256).toByte() }
         val source = File.createTempFile("resume-source", ".bin", context.cacheDir).apply { writeBytes(bytes) }
@@ -161,6 +163,23 @@ class FileSendingTest {
             current.set(mac.copy(device = mac.device.copy(id = "other"), session = 2))
             assertFalse(manager.resumeTransfer(id))
             current.set(mac.copy(session = 2))
+            if (remoteCancel) {
+                manager.handleAck(ProtocolMessage.FileAck("other", 0, "CANCELLED"), "mac")
+                manager.handleAck(ProtocolMessage.FileAck(id, 0, "CANCELLED"), "other")
+                delay(50)
+                assertEquals(TransferStatus.PAUSED, history.values[id]!!.status)
+                current.set(mac.copy(device = mac.device.copy(fingerprint = "changed"), session = 2))
+                manager.handleAck(ProtocolMessage.FileAck(id, 0, "CANCELLED"), "mac")
+                delay(50)
+                assertEquals(TransferStatus.PAUSED, history.values[id]!!.status)
+                current.set(mac.copy(session = 2))
+                manager.handleAck(ProtocolMessage.FileAck(id, 0, "CANCELLED"), "mac")
+                withTimeout(3000) { while (history.values[id]!!.status == TransferStatus.PAUSED) delay(10) }
+                assertTrue(history.values[id]!!.errorMessage!!.startsWith("Cancelled"))
+                assertFalse(manager.resumeTransfer(id))
+                assertTrue(File(context.filesDir, "outgoing_transfers").listFiles().isNullOrEmpty())
+                return@runBlocking
+            }
             source.writeBytes(byteArrayOf(99))
             val before = frames.size
             if (corrupt) File(context.filesDir, "outgoing_transfers").listFiles()!!.single().writeBytes(bytes.reversedArray())
@@ -220,5 +239,10 @@ class FileSendingTest {
     @Test fun `unreported oversized stream is bounded and deleted`() = scenario(byteArrayOf(1), reportedSize = null, oversizedStream = true)
     @Test fun `disconnect or permission revocation before chunk prevents completion`() = scenario(byteArrayOf(1), response = "disconnect")
     @Test fun `acknowledgements from another peer are ignored`() = scenario(byteArrayOf(1), response = "wrong-peer")
+    @Test fun `Mac cancels during initial offer and chunk acknowledgement without retaining snapshot`() {
+        scenario(byteArrayOf(1), response = "remote-cancel")
+        scenario(ByteArray(80000), response = "remote-cancel-chunk")
+    }
+
     @Test fun `cancel while waiting cleans snapshot and notifies Mac`() = scenario(byteArrayOf(1), response = "timeout", cancel = true)
 }

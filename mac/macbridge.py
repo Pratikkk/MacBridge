@@ -191,13 +191,24 @@ class Companion:
         else:
             print(message, flush=True)
 
+    def receiving_selection(self):
+        current = self.peer_receivers.get((self.active_id, self.peers.get(self.active_id, {}).get('publicKey')))
+        return current if current and current.result != 'idle' else next((r for r in self.peer_receivers.values() if r.active), self.last_receiver)
+
+    def receive_token(self, receiver):
+        if not receiver or not receiver.active:
+            return ''
+        identity = next((key for key, value in self.peer_receivers.items() if value is receiver), None)
+        if identity is None:
+            return ''
+        return hashlib.sha256(json.dumps([*identity, receiver.active['id'], receiver.active['temporary'].name]).encode()).hexdigest()
+
     def emit_state(self):
         if not self.event_sink:
             return
         with self.lock:
             remaining = max(0, self.secret_expires - time.monotonic())
-            current = self.peer_receivers.get((self.active_id, self.peers.get(self.active_id, {}).get('publicKey')))
-            receiver = (current if current and current.result != "idle" else next((r for r in self.peer_receivers.values() if r.active), self.last_receiver))
+            receiver = self.receiving_selection()
             value = dict(event='state', running=not self.stop_event.is_set(),
                 connected=self.active_id is not None,
                 phoneName=self.peers.get(self.active_id, {}).get('name', 'Android Phone'),
@@ -206,7 +217,7 @@ class Companion:
                 fileSendStatus=self.sender.result if self.sender else 'idle',
                 fileCanResume=bool(self.sender and self.sender.result == 'paused' and self.active_stream is not None and self.sender_peer == (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))),
                 connectionId=self.connection_id, fileSending=self.sender.busy if self.sender else False,
-                fileReceiveStatus=receiver.result if receiver else 'idle',
+                fileReceiveStatus=receiver.result if receiver else 'idle', fileReceiveToken=self.receive_token(receiver),
                 receivedBytes=receiver.received_bytes if receiver else 0, receivedFileSize=receiver.file_size if receiver else 0,
                 sentBytes=self.sender.sent_bytes if self.sender else 0, fileSize=self.sender.file_size if self.sender else 0, endpoint=f'{self.address}:{self.port}',
                 pairingURI=self.pairing_uri(self.address) if self.address and self.secret and remaining > 0 else '',
@@ -248,6 +259,21 @@ class Companion:
                         except OSError:
                             pass
                     self.sender.cancel()
+        elif action == 'cancelFileReceive':
+            with self.lock:
+                receiver = self.receiving_selection()
+                token = self.receive_token(receiver)
+                if not token or command.get('transferToken') != token:
+                    return
+                identity = next(key for key, value in self.peer_receivers.items() if value is receiver)
+                ack = receiver.cancel(receiver.active['id'])
+                current = (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))
+                if ack and self.active_stream is not None and identity == current:
+                    try:
+                        write_frame(self.active_stream, ack)
+                    except OSError:
+                        pass
+                self.receive_progress(receiver)
         elif action == 'reissueCode':
             address = command.get('address') or detect_address()
             ipaddress.IPv4Address(address)
@@ -377,7 +403,7 @@ class Companion:
                         if message.get('type') == 'HEARTBEAT' and message.get('isAck') is False:
                             write_frame(stream, dict(message, isAck=True))
                         elif message.get('type') == 'FILE_ACK':
-                            if self.sender:
+                            if self.sender and identity == self.sender_peer:
                                 self.sender.handle_ack(message)
                         elif message.get('type') in ('FILE_INIT', 'FILE_CHUNK', 'FILE_CANCEL'):
                             ack = receiver.process(message, self.files)

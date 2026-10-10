@@ -63,7 +63,9 @@ class FileReceivingTest {
         val target = AtomicReference<FileTransferTarget?>(source)
         val permitted = java.util.concurrent.atomic.AtomicBoolean(resumable)
         val acks = CopyOnWriteArrayList<ProtocolMessage.FileAck>()
-        val manager = FileReceivingManager(context, history, scope, { target.get() }, { message, _ ->
+        val ackTargets = CopyOnWriteArrayList<FileTransferTarget>()
+        val manager = FileReceivingManager(context, history, scope, { target.get() }, { message, destination ->
+            ackTargets.add(destination)
             acks.add(message as ProtocolMessage.FileAck); true
         }, timeout, retain = { permitted.get() }, resumeWindowMs = resumeWindow, progressClock = progressClock)
         val folder get() = File(context.filesDir, "received_files")
@@ -157,6 +159,35 @@ class FileReceivingTest {
             assertTrue(folder.listFiles().isNullOrEmpty())
         } } finally { fixture.close() }
     }
+    @Test fun `cancel receiving after reconnect notifies current original identity session`() = runBlocking {
+        val fixture = Fixture(resumable = true)
+        try { with(fixture) {
+            start(byteArrayOf(1)); target.set(null)
+            withTimeout(3000) { while (history.values.values.single().status != TransferStatus.PAUSED) delay(10) }
+            target.set(source.copy(session = 2))
+            manager.cancel("incoming-mac-file")
+            assertEquals("CANCELLED", acks.last().status)
+            assertEquals(2L, ackTargets.last().session)
+            assertTrue(folder.listFiles().isNullOrEmpty())
+            val count = acks.size
+            manager.cancel("incoming-mac-file")
+            assertEquals(count, acks.size)
+        } } finally { fixture.close() }
+    }
+
+    @Test fun `cancel receiving never notifies a replacement identity or removes completed file`() = scenario {
+        deliver(byteArrayOf(9), id = "done")
+        val saved = File(history.values["incoming-done"]!!.filePath!!)
+        manager.cancel("incoming-done")
+        assertArrayEquals(byteArrayOf(9), saved.readBytes())
+        start(byteArrayOf(1))
+        target.set(source.copy(device = source.device.copy(fingerprint = "changed")))
+        val count = acks.size
+        manager.cancel("incoming-mac-file")
+        assertEquals(count, acks.size)
+        assertArrayEquals(byteArrayOf(9), saved.readBytes())
+    }
+
     @Test fun `cancel paused incoming transfer cannot be resumed by Mac`() = runBlocking {
         val fixture = Fixture(resumable = true)
         try { with(fixture) {

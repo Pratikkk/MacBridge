@@ -40,6 +40,25 @@ class FileReceiverTests(unittest.TestCase):
         self.assertEqual('COMPLETED', self.receiver.process(dict(self.init(b'x'), resume=True), True)['status'])
         self.assertEqual(('receiving', 0, CHUNK_SIZE + 1), (self.receiver.result, self.receiver.received_bytes, self.receiver.file_size))
 
+    def test_local_cancel_active_paused_and_stale_actions_preserve_verified_files(self):
+        self.receiver.process(self.init(b'v', transfer='verified'), True)
+        self.receiver.process(self.chunk(b'v', transfer='verified'), True)
+        saved = self.receiver.last_saved
+        for paused in (False, True):
+            self.receiver.process(self.init(b'x' * (CHUNK_SIZE + 1)), True)
+            self.receiver.process(self.chunk(b'x' * CHUNK_SIZE, total=2), True)
+            if paused:
+                self.receiver.pause()
+            self.assertIsNone(self.receiver.cancel('other'))
+            ack = self.receiver.cancel('test')
+            self.assertEqual(('CANCELLED', CHUNK_SIZE), (ack['status'], ack['receivedBytes']))
+            self.assertEqual('cancelled', self.receiver.result)
+            self.assertIsNone(self.receiver.cancel('test'))
+            self.assertEqual(b'v', saved.read_bytes())
+            self.assertEqual([saved], self.files())
+            self.assertEqual('REJECTED', self.receiver.process(dict(self.init(b'x' * (CHUNK_SIZE + 1)), resume=True), True)['status'])
+            self.receiver.cancelled.clear()
+
     def test_zero_byte_file_is_verified(self):
         self.assertEqual('COMPLETED', self.receiver.process(self.init(b''), True)['status'])
         self.assertEqual(b'', self.files()[0].read_bytes())
@@ -112,6 +131,42 @@ class FileReceiverTests(unittest.TestCase):
         self.receiver.abort()
 
 class CompanionFileTests(unittest.TestCase):
+    def test_receiving_cancel_token_notifies_only_original_peer_and_rejects_stale_clicks(self):
+        import io, json
+        with tempfile.TemporaryDirectory() as temp:
+            events = []
+            companion = Companion(temp, host='127.0.0.1', port=0, files=True, event_sink=events.append)
+            receiver = FileReceiver(Path(temp) / 'ReceivedFiles')
+            identity = ('phone', 'public')
+            companion.peers['phone'] = dict(publicKey='public')
+            companion.peer_receivers[identity] = receiver
+            companion.active_id = 'phone'
+            stream = companion.active_stream = io.BytesIO()
+            init = dict(type='FILE_INIT', transferId='first', fileName='file', fileSize=1, sha256Checksum=hashlib.sha256(b'x').hexdigest(), chunkSize=CHUNK_SIZE)
+            try:
+                receiver.process(init, True); companion.emit_state()
+                old = events[-1]['fileReceiveToken']
+                companion.handle_command(dict(action='cancelFileReceive', transferToken='bad'))
+                self.assertIsNotNone(receiver.active)
+                companion.handle_command(dict(action='cancelFileReceive', transferToken=old))
+                self.assertEqual('CANCELLED', json.loads(stream.getvalue())['status'])
+                self.assertEqual('cancelled', events[-1]['fileReceiveStatus'])
+                self.assertEqual('', events[-1]['fileReceiveToken'])
+                receiver.process(init, True)  # A peer may reuse a wire ID for a new transfer.
+                companion.handle_command(dict(action='cancelFileReceive', transferToken=old))
+                self.assertEqual('first', receiver.active['id'])
+                self.assertNotEqual(old, companion.receive_token(receiver))
+                receiver.pause(); companion.active_id = None; companion.emit_state()
+                token = events[-1]['fileReceiveToken']
+                before = stream.getvalue()
+                companion.handle_command(dict(action='cancelFileReceive', transferToken=token))
+                self.assertIsNone(receiver.active)
+                self.assertEqual(before, stream.getvalue())
+            finally:
+                companion.active_stream = None
+                companion.close()
+
+
     def test_incoming_progress_is_coalesced_and_final_state_is_immediate(self):
         with tempfile.TemporaryDirectory() as temp:
             events = []

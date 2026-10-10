@@ -51,14 +51,17 @@ struct CompanionMenu: View {
         Button("Send File to Phone…", action: controller.sendFileToPhone)
             .disabled(!controller.running || !controller.connected || controller.fileSending || controller.fileSendStatus == "paused")
         Button("Show Received Files", action: controller.showReceivedFiles)
-        if controller.sending.visible { Text("To Phone · \(controller.sending.detail)") }
-        if controller.receiving.visible { Text("From Phone · \(controller.receiving.detail)") }
+        if controller.sending.visible { Text("Sending to Phone · \(controller.sending.detail)") }
+        if controller.receiving.visible { Text("Receiving from Phone · \(controller.receiving.detail)") }
         if controller.fileSendStatus == "paused" && !controller.fileSending {
             Button("Resume File Sending", action: controller.resumeFileSend)
                 .disabled(!controller.fileCanResume)
         }
         if controller.fileSending || controller.fileSendStatus == "paused" {
             Button("Cancel File Sending", action: controller.cancelFileSend)
+        }
+        if !controller.fileReceiveToken.isEmpty {
+            Button("Cancel File Receiving", action: controller.cancelFileReceive)
         }
         Divider()
         Toggle("Allow Clipboard Sharing", isOn: Binding(
@@ -198,8 +201,8 @@ struct CompanionSettingsView: View {
                 connected: controller.connected, clipboardEnabled: controller.clipboardEnabled,
                 phoneName: controller.phoneName).status)
             LabeledContent("Local address", value: controller.endpoint)
-            if controller.sending.visible { transferProgress("To Phone", value: controller.sending) }
-            if controller.receiving.visible { transferProgress("From Phone", value: controller.receiving) }
+            if controller.sending.visible { transferProgress("Sending to Phone", value: controller.sending) }
+            if controller.receiving.visible { transferProgress("Receiving from Phone", value: controller.receiving) }
             Text(controller.errorMessage ?? controller.lastAction)
                 .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)

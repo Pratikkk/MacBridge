@@ -47,6 +47,16 @@ class TransferRestartTests(unittest.TestCase):
             self.assertEqual('COMPLETED', receiver.process(self.chunk(1), True)['status'])
             self.assertEqual(self.data, receiver.last_saved.read_bytes())
         finally: receiver.abort()
+    def test_cancelling_restored_partial_cannot_restore_after_another_restart(self):
+        self.partial()
+        receiver = FileReceiver(self.folder, state=self.state)
+        self.assertEqual('CANCELLED', receiver.cancel('restart')['status'])
+        self.assertFalse(list(self.folder.glob('.incoming-*')))
+        restored = FileReceiver(self.folder, state=self.state)
+        self.assertIsNone(restored.active)
+        self.assertEqual('REJECTED', restored.process(dict(self.init, resume=True), True)['status'])
+        restored.abort()
+
     def test_reopening_without_resuming_does_not_extend_the_saved_deadline(self):
         self.partial()
         expires = json.loads(self.state.path.read_text())['incoming']['expires']

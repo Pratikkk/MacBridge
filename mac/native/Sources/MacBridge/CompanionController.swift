@@ -21,6 +21,7 @@ final class CompanionController: ObservableObject {
     @Published private(set) var sentBytes: Int64 = 0
     @Published private(set) var fileSize: Int64 = 0
     @Published private(set) var receiving = TransferPresentation(status: "idle", bytes: 0, total: 0)
+    @Published private(set) var fileReceiveToken = ""
     var sending: TransferPresentation { TransferPresentation(status: fileSendStatus, bytes: sentBytes, total: fileSize) }
     private var filePickerOpen = false
     private var connectionId = ""
@@ -69,6 +70,7 @@ final class CompanionController: ObservableObject {
                 self.fileSending = false
                 self.fileCanResume = false
                 self.fileSendStatus = "idle"
+                self.fileReceiveToken = ""
                 self.receiving = TransferPresentation(status: "idle", bytes: 0, total: 0)
                 self.connectionId = ""
                 self.pairingURI = ""
@@ -126,6 +128,7 @@ final class CompanionController: ObservableObject {
         update(\.fileSending, value.fileSending ?? false)
         update(\.fileSendStatus, value.fileSendStatus ?? "idle")
         update(\.fileCanResume, value.fileCanResume ?? false)
+        update(\.fileReceiveToken, value.fileReceiveToken ?? "")
         update(\.receiving, TransferPresentation(status: value.fileReceiveStatus ?? "idle", bytes: value.receivedBytes ?? 0, total: value.receivedFileSize ?? 0))
         update(\.sentBytes, value.sentBytes ?? 0)
         update(\.fileSize, value.fileSize ?? 0)
@@ -179,6 +182,7 @@ final class CompanionController: ObservableObject {
         }
     }
     func resumeFileSend() { command(["action": "resumeFileSend", "connectionId": connectionId]) }
+    func cancelFileReceive() { command(["action": "cancelFileReceive", "transferToken": fileReceiveToken]) }
     func cancelFileSend() { command(["action": "cancelFileSend"]) }
     func showReceivedFiles() {
         let folder = FileManager.default.homeDirectoryForCurrentUser
@@ -222,6 +226,7 @@ final class CompanionController: ObservableObject {
         fileSending = false
         fileCanResume = false
         fileSendStatus = "idle"
+        fileReceiveToken = ""
         receiving = TransferPresentation(status: "idle", bytes: 0, total: 0)
         connectionId = ""
         pairingURI = ""

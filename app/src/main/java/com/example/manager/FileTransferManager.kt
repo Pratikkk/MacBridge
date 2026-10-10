@@ -17,6 +17,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+private class RemoteTransferCancelled : CancellationException("Cancelled by your Mac.")
 private class TransferInterrupted : Exception()
 private class TransferFailure(val explanation: String) : Exception()
 private fun insist(value: Boolean, message: () -> String) { if (!value) throw TransferFailure(message()) }
@@ -71,7 +72,17 @@ class FileTransferManager(
 
     fun handleAck(message: ProtocolMessage.FileAck, deviceId: String) {
         val value = expectedPeer
-        if (value == deviceId) acknowledgements[message.transferId]?.trySend(message)
+        if (value == deviceId) {
+            val channel = acknowledgements[message.transferId]
+            if (message.status == "CANCELLED") channel?.cancel(RemoteTransferCancelled()) else channel?.trySend(message)
+        }
+        if (message.status == "CANCELLED") {
+            val pending = paused?.takeIf { it.item.transferId == message.transferId && it.destination.device.id == deviceId } ?: return
+            scope.launch {
+                val current = target()
+                if (current != null && current.device.id == deviceId && current.device.fingerprint == pending.destination.device.fingerprint) cancelTransfer(message.transferId)
+            }
+        }
     }
     @Volatile private var expectedPeer: String? = null
 
@@ -256,13 +267,14 @@ class FileTransferManager(
                 complete = true
             } catch (error: Exception) {
                 keep = withContext(NonCancellable) { snapshot != null && item.sha256Checksum.isNotEmpty() && destination != null &&
-                    (error is TimeoutCancellationException || error is TransferInterrupted || error is CancellationException && !scope.isActive) && retain(destination) }
+                    (error !is RemoteTransferCancelled) && (error is TimeoutCancellationException || error is TransferInterrupted || error is CancellationException && !scope.isActive) && retain(destination) }
                 if (keep) {
                     val value = Paused(item.copy(status = TransferStatus.PAUSED), destination!!, snapshot!!, expires = System.currentTimeMillis() + resumeWindowMs)
                     keep = withContext(NonCancellable + Dispatchers.IO) { runCatching { saveCheckpoint(value) }.isSuccess }
                     if (keep) paused = value
                 }
                 val message = when (error) {
+                    is RemoteTransferCancelled -> "Cancelled by your Mac. Any unverified partial file is removed."
                     is TransferInterrupted -> "Connection interrupted. Reconnect the same Mac and resume within 10 minutes."
                     is TimeoutCancellationException -> "Transfer paused. Reconnect the same Mac and resume within 10 minutes."
                     is CancellationException -> if (keep) "Transfer paused. Reconnect the original Mac to resume after reopening." else "Cancelled. Any unverified partial file is removed."

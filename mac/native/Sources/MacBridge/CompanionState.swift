@@ -18,6 +18,7 @@ struct CompanionEvent: Decodable {
     let fileSendStatus: String?
     let fileCanResume: Bool?
     let fileReceiveStatus: String?
+    let fileReceiveToken: String?
     let receivedBytes: Int64?
     let receivedFileSize: Int64?
     let sentBytes: Int64?

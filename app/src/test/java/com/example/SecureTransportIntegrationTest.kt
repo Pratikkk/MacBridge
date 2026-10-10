@@ -73,6 +73,8 @@ class SecureTransportIntegrationTest {
                     time.sleep(.05)
                 peer.resume_file(peer.connection_id)
                 peer.sender.finished.wait(20)
+            from pathlib import Path
+            Path(sys.argv[2], 'sender-result.txt').write_text(peer.sender.result)
             while True: time.sleep(1)
         """.trimIndent()
         val command = if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")
@@ -190,7 +192,9 @@ class SecureTransportIntegrationTest {
 
     @Test fun `real TLS Mac to phone transfer resumes after connection loss`() = receiveMacFile(true)
 
-    private fun receiveMacFile(resume: Boolean) = withMac(sendsFile = true, resumeFile = resume) { code ->
+    @Test fun `phone receiving cancellation stops real Mac sender over TLS`() = receiveMacFile(false, cancel = true)
+
+    private fun receiveMacFile(resume: Boolean, cancel: Boolean = false) = withMac(sendsFile = true, resumeFile = resume) { code ->
         val context = ApplicationProvider.getApplicationContext<Context>()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val history = TestFileHistory()
@@ -204,6 +208,7 @@ class SecureTransportIntegrationTest {
         }
         transport = SecureTransport(IdentityManager(context, true), scope, { message, _ ->
             target()?.let { receiver.process(message, it) }
+            if (cancel && message is ProtocolMessage.FileInit) receiver.cancel("incoming-${message.transferId}")
         }, {})
         receiver = com.example.manager.FileReceivingManager(context, history, scope, { target() }, { message, _ ->
             val sent = if (resume && !interrupted.isCompleted && message is ProtocolMessage.FileAck && message.status == "IN_PROGRESS") {
@@ -221,6 +226,15 @@ class SecureTransportIntegrationTest {
                 delay(500)
                 transport.connectToDevice(verified)
                 withTimeout(10000) { transport.connectionState.first { it is ConnectionState.Connected } }
+            }
+            if (cancel) {
+                val result = File(peerDirectory, "sender-result.txt")
+                withTimeout(15000) { while (!result.isFile || result.readText().isEmpty()) delay(25) }
+                assertEquals("cancelled", result.readText())
+                assertTrue(history.values.values.single().errorMessage!!.startsWith("Cancelled"))
+                assertTrue(File(context.filesDir, "received_files").listFiles().isNullOrEmpty())
+                assertFalse(complete.isCompleted)
+                return@runBlocking
             }
             val ack = withTimeout(15000) { complete.await() }
             assertEquals(80000, ack.receivedBytes)

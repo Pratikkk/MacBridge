@@ -125,6 +125,18 @@ class FileReceiver:
                 pass
         self.checkpoint()
 
+    def cancel(self, transfer_id):
+        # A stale UI action must never discard a different or completed transfer.
+        if not self.active or self.active['id'] != transfer_id:
+            return None
+        count = self.active['offset']
+        self.cancelled.add(transfer_id)
+        if len(self.cancelled) > 64:
+            self.cancelled.pop()
+        self.abort()
+        self.result = 'cancelled'
+        return self.ack(transfer_id, 'CANCELLED', count)
+
     def discard(self):
         self.abort()
         self.completed.clear()

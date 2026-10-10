@@ -34,7 +34,7 @@ class FileSenderTests(unittest.TestCase):
                 if behavior == 'disconnect':
                     raise OSError('private path detail')
                 ack = dict(type='FILE_ACK', transferId=frame['transferId'], receivedBytes=0,
-                    status='REJECTED' if behavior == 'reject' else ('READY' if data else 'COMPLETED'))
+                    status='CANCELLED' if behavior == 'remote-cancel' else 'REJECTED' if behavior == 'reject' else ('READY' if data else 'COMPLETED'))
                 if not data:
                     ack['sha256Checksum'] = frame['sha256Checksum']
                 if behavior == 'wrong-id':
@@ -106,7 +106,25 @@ class FileSenderTests(unittest.TestCase):
 
     def test_cancellation_and_disconnect_cleanup(self):
         self.scenario(behavior='cancel')
+        self.scenario(behavior='remote-cancel')
         self.scenario(behavior='disconnect')
+
+    def test_remote_cancel_paused_sender_ignores_wrong_transfer_and_completed_sender(self):
+        source = self.root / 'source'; source.write_bytes(b'x')
+        sender = FileSender(self.root / 'spool', lambda _: None, lambda _: None, timeout=.01)
+        sender.start(source)
+        self.assertTrue(sender.finished.wait(3))
+        self.assertEqual('paused', sender.result)
+        sender.handle_ack(dict(transferId='other', status='CANCELLED'))
+        self.assertEqual('paused', sender.result)
+        sender.handle_ack(dict(transferId=sender.transfer_id, status='CANCELLED'))
+        self.assertEqual('cancelled', sender.result)
+        self.assertFalse(list((self.root / 'spool').glob('.outgoing-*')))
+        sender.result = 'completed'
+        sender.cancelled.clear()
+        sender.handle_ack(dict(transferId=sender.transfer_id, status='CANCELLED'))
+        self.assertEqual('completed', sender.result)
+        self.assertFalse(sender.cancelled.is_set())
 
     def test_oversize_missing_and_nonregular_files_send_nothing(self):
         oversized = self.root / 'large'

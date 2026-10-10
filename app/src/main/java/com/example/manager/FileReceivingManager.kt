@@ -322,12 +322,16 @@ class FileReceivingManager(
     }
 
     suspend fun cancel(transferId: String) = withContext(Dispatchers.IO) {
+        initialized.await()
         mutex.withLock {
             val value = active?.takeIf { it.item.transferId == transferId } ?: return@withLock
             cancelled[value.id] = value.source
             if (cancelled.size > 64) cancelled.remove(cancelled.keys.first())
             abort("Cancelled. Ask your Mac to send the file again.")
-            send(ProtocolMessage.FileAck(value.id, value.item.transferredBytes, "CANCELLED"), value.source)
+            val current = target()
+            if (current != null && samePeer(current, value.source)) {
+                send(ProtocolMessage.FileAck(value.id, value.item.transferredBytes, "CANCELLED"), current)
+            }
         }
     }
 
