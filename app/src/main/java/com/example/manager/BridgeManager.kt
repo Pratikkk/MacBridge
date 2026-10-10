@@ -82,9 +82,17 @@ class BridgeManager(
         )
 
         fileTransferManager = FileTransferManager(context, database.fileTransferDao(), scope,
-            target = { fileTarget() }, send = { message, destination -> sendFileFrame(message, destination) })
+            target = { fileTarget() }, send = { message, destination -> sendFileFrame(message, destination) },
+            retain = { original ->
+                val saved = database.pairedDeviceDao().getDeviceById(original.device.id)
+                saved != null && !saved.isBlocked && saved.allowFileTransfer && saved.fingerprint == original.device.fingerprint
+            })
         fileReceivingManager = FileReceivingManager(context, database.fileTransferDao(), scope,
-            target = { fileTarget() }, send = { message, destination -> sendFileFrame(message, destination) })
+            target = { fileTarget() }, send = { message, destination -> sendFileFrame(message, destination) },
+            retain = { original ->
+                val saved = database.pairedDeviceDao().getDeviceById(original.device.id)
+                saved != null && !saved.isBlocked && saved.allowFileTransfer && saved.fingerprint == original.device.fingerprint
+            })
 
         macSimulator = MacSimulatorBench(
             scope = scope,

@@ -26,7 +26,7 @@ class FileReceiverTests(unittest.TestCase):
     def test_verified_multichunk_and_unicode_name(self):
         data = bytes(range(256)) * 300
         self.assertEqual('READY', self.receiver.process(self.init(data, '🌉 notes.txt'), True)['status'])
-        self.assertEqual('IN_PROGRESS', self.receiver.process(self.chunk(data[:CHUNK_SIZE], total=2), True)['status'])
+        self.assertEqual('IN_PROGRESS', self.receiver.process(dict(type='FILE_CHUNK', transferId='test', chunkIndex=0, totalChunks=2, offset=0, chunkLength=CHUNK_SIZE, dataBase64=base64.b64encode(data[:CHUNK_SIZE]).decode()), True)['status'])
         ack = self.receiver.process(self.chunk(data[CHUNK_SIZE:], 1, CHUNK_SIZE, 2), True)
         self.assertEqual('COMPLETED', ack['status'])
         self.assertEqual(hashlib.sha256(data).hexdigest(), ack['sha256Checksum'])
@@ -84,6 +84,25 @@ class FileReceiverTests(unittest.TestCase):
         self.receiver.process(self.init(b'x'), True)
         self.assertEqual('REJECTED', self.receiver.process(self.chunk(b'x', transfer='other'), True)['status'])
         self.assertEqual('COMPLETED', self.receiver.process(self.chunk(b'x'), True)['status'])
+
+    def test_resume_mismatch_cancel_and_expiry(self):
+        import time
+        data = b'x' * (CHUNK_SIZE + 10)
+        init = self.init(data)
+        self.receiver.process(init, True)
+        self.receiver.process(dict(type='FILE_CHUNK', transferId='test', chunkIndex=0, totalChunks=2, offset=0, chunkLength=CHUNK_SIZE, dataBase64=base64.b64encode(data[:CHUNK_SIZE]).decode()), True)
+        self.receiver.pause()
+        resumed = dict(init, resume=True)
+        self.assertEqual('REJECTED', self.receiver.process(dict(resumed, sha256Checksum='0'*64), True)['status'])
+        self.assertEqual(CHUNK_SIZE, self.receiver.process(resumed, True)['receivedBytes'])
+        self.receiver.process(dict(type='FILE_CANCEL', transferId='test'), True)
+        self.assertEqual('REJECTED', self.receiver.process(resumed, True)['status'])
+        self.assertFalse(self.files())
+        self.receiver.process(dict(init, transferId='expired'), True)
+        self.receiver.pause()
+        self.receiver.paused_at = time.monotonic() - 601
+        self.assertEqual('REJECTED', self.receiver.process(dict(resumed, transferId='expired'), True)['status'])
+        self.receiver.abort()
 
 class CompanionFileTests(unittest.TestCase):
     def test_default_permission_off_strict_toggle_and_revocation(self):

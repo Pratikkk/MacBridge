@@ -7,8 +7,10 @@ import re
 import shutil
 import tempfile
 import uuid
+import time
 
 CHUNK_SIZE = 65536
+RESUME_TTL_SECONDS = 600
 MAX_FILE_SIZE = 100 * 1024 * 1024
 
 
@@ -17,8 +19,17 @@ class FileReceiver:
         self.directory = Path(directory)
         self.active = None
         self.last_saved = None
+        self.completed = {}
+        self.cancelled = set()
+        self.paused_at = None
+
+    def pause(self):
+        if self.active:
+            self.active["stream"].flush()
+            self.paused_at = time.monotonic()
 
     def abort(self):
+        self.paused_at = None
         if self.active:
             value, self.active = self.active, None
             try:
@@ -46,10 +57,36 @@ class FileReceiver:
         try:
             kind = message.get('type')
             if kind == 'FILE_CANCEL':
+                if len(self.cancelled) >= 64:
+                    self.cancelled.pop()
+                self.cancelled.add(transfer_id)
                 if self.active and self.active['id'] == transfer_id:
                     self.abort()
                 return self.ack(transfer_id, 'CANCELLED')
             if kind == 'FILE_INIT':
+                if self.paused_at is not None and time.monotonic() - self.paused_at > RESUME_TTL_SECONDS:
+                    self.abort()
+                if message.get('resume') is True:
+                    if transfer_id in self.cancelled:
+                        return self.ack(transfer_id, 'REJECTED')
+                    receipt = self.completed.get(transfer_id)
+                    if message.get('chunkSize') == CHUNK_SIZE and receipt and receipt[:3] == (message.get('fileSize'), message.get('fileName'), message.get('sha256Checksum')):
+                        return self.ack(transfer_id, 'COMPLETED', receipt[0], receipt[2])
+                    if self.active and self.active['id'] == transfer_id:
+                        value = self.active
+                        if (message.get('fileSize'), message.get('fileName'), message.get('sha256Checksum'), message.get('chunkSize')) != (value['size'], value['name'], value['checksum'], CHUNK_SIZE):
+                            return self.ack(transfer_id, 'REJECTED')
+                        value['stream'].flush()
+                        if value['temporary'].stat().st_size != value['offset']:
+                            self.abort()
+                            return self.ack(transfer_id, 'FAILED')
+                        value['digest'] = hashlib.sha256()
+                        with value['temporary'].open('rb') as prefix:
+                            while data := prefix.read(CHUNK_SIZE):
+                                value['digest'].update(data)
+                        self.paused_at = None
+                        return self.ack(transfer_id, 'READY', value['offset'])
+                    return self.ack(transfer_id, 'REJECTED')
                 if self.active:
                     return self.ack(transfer_id, 'BUSY')
                 size, name, digest = message.get('fileSize'), message.get('fileName'), message.get('sha256Checksum')
@@ -71,7 +108,7 @@ class FileReceiver:
                     raise OSError('Insufficient free space')
                 stream = tempfile.NamedTemporaryFile(prefix='.incoming-', dir=self.directory, delete=False)
                 os.chmod(stream.name, 0o600)
-                self.active = dict(id=transfer_id, size=size, checksum=digest, offset=0, index=0,
+                self.active = dict(id=transfer_id, name=name, size=size, checksum=digest, offset=0, index=0,
                     stream=stream, temporary=Path(stream.name), digest=hashlib.sha256(),
                     destination=self.directory / (str(uuid.uuid4()) + '-' + safe))
                 if size == 0:
@@ -112,6 +149,9 @@ class FileReceiver:
         os.fsync(value['stream'].fileno())
         value['stream'].close()
         value['temporary'].replace(value['destination'])
+        self.completed[value['id']] = (value['size'], value['name'], digest)
+        if len(self.completed) > 64:
+            del self.completed[next(iter(self.completed))]
         self.last_saved = value['destination']
         self.active = None
         return self.ack(value['id'], 'COMPLETED', value['size'], digest)

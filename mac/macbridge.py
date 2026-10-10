@@ -18,7 +18,7 @@ import time
 from urllib.parse import urlencode
 import uuid
 
-from file_receiver import FileReceiver
+from file_receiver import FileReceiver, RESUME_TTL_SECONDS
 from file_sender import FileSender
 
 MAX_FRAME = 1024 * 1024
@@ -110,6 +110,8 @@ class Companion:
         self.files = files
         self.receivers = set()
         self.sender = None
+        self.sender_peer = None
+        self.peer_receivers = {}
         outgoing = self.directory / 'OutgoingFiles'
         if outgoing.exists() and not outgoing.is_symlink():
             for partial in outgoing.glob('.outgoing-*'):
@@ -167,6 +169,7 @@ class Companion:
                 peers=[dict(id=key, name=peer.get('name', 'Android Phone')) for key, peer in sorted(self.peers.items())],
                 clipboardEnabled=self.clipboard, filesEnabled=self.files,
                 fileSendStatus=self.sender.result if self.sender else 'idle',
+                fileCanResume=bool(self.sender and self.sender.result == 'paused' and self.active_stream is not None and self.sender_peer == (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))),
                 connectionId=self.connection_id, fileSending=self.sender.busy if self.sender else False,
                 sentBytes=self.sender.sent_bytes if self.sender else 0, fileSize=self.sender.file_size if self.sender else 0, endpoint=f'{self.address}:{self.port}',
                 pairingURI=self.pairing_uri(self.address) if self.address and self.secret and remaining > 0 else '',
@@ -179,7 +182,7 @@ class Companion:
             self.active_socket = self.active_stream = self.active_id = None
             self.connection_id = ""
             if self.sender:
-                self.sender.cancel()
+                self.sender.interrupt()
             if current:
                 try:
                     current.shutdown(socket.SHUT_RDWR)
@@ -196,9 +199,17 @@ class Companion:
             if not isinstance(path, str) or not path or len(path) > 4096:
                 raise ValueError('Choose a file to send')
             self.start_file(path, command.get('connectionId'))
+        elif action == 'resumeFileSend':
+            self.resume_file(command.get('connectionId'))
         elif action == 'cancelFileSend':
             with self.lock:
                 if self.sender:
+                    identity = (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))
+                    if self.active_stream is not None and identity == self.sender_peer:
+                        try:
+                            write_frame(self.active_stream, dict(type='FILE_CANCEL', transferId=self.sender.transfer_id))
+                        except OSError:
+                            pass
                     self.sender.cancel()
         elif action == 'reissueCode':
             address = command.get('address') or detect_address()
@@ -220,7 +231,7 @@ class Companion:
             with self.lock:
                 self.files = enabled
                 if not enabled:
-                    for receiver in self.receivers:
+                    for receiver in set(self.peer_receivers.values()) | self.receivers:
                         receiver.abort()
             self.report('File receiving enabled' if enabled else 'File receiving paused')
         elif action == 'disconnect':
@@ -289,7 +300,7 @@ class Companion:
 
     def handle(self, raw):
         secure = None
-        receiver = FileReceiver(self.directory / "ReceivedFiles")
+        receiver = None
         try:
             raw.settimeout(10)
             secure = self.context.wrap_socket(raw, server_side=True)
@@ -306,10 +317,18 @@ class Companion:
                     if previous:
                         previous.shutdown(socket.SHUT_RDWR)
                     if self.sender:
-                        self.sender.cancel()
+                        self.sender.interrupt()
                     self.active_socket, self.active_stream, self.active_id = secure, stream, peer_id
                     self.connection_id = str(uuid.uuid4())
                 with self.lock:
+                    identity = (peer_id, self.peers[peer_id].get('publicKey'))
+                    receiver = self.peer_receivers.get(identity)
+                    if receiver is None:
+                        if len(self.peer_receivers) >= 4:
+                            _, old = self.peer_receivers.popitem()
+                            old.abort()
+                        receiver = FileReceiver(self.directory / "ReceivedFiles")
+                        self.peer_receivers[identity] = receiver
                     self.receivers.add(receiver)
                 secure.settimeout(45)
                 self.report('Phone connected with verified identity')
@@ -349,13 +368,16 @@ class Companion:
             self.report(f'Connection closed ({type(error).__name__})')
         finally:
             with self.lock:
-                receiver.abort()
-                self.receivers.discard(receiver)
+                if receiver is not None:
+                    current_receiver = self.peer_receivers.get((self.active_id, self.peers.get(self.active_id, {}).get('publicKey')))
+                    if self.active_socket is secure or current_receiver is not receiver:
+                        receiver.pause()
+                    self.receivers.discard(receiver)
                 if self.active_socket is secure:
                     self.active_socket = self.active_stream = self.active_id = None
                     self.connection_id = ""
                     if self.sender:
-                        self.sender.cancel()
+                        self.sender.cancel() if self.stop_event.is_set() else self.sender.interrupt()
                 self.connections.discard(raw)
                 self.connections.discard(secure)
             if secure:
@@ -364,8 +386,17 @@ class Companion:
             self.slots.release()
             self.emit_state()
 
+    def expire_transfers(self):
+        with self.lock:
+            if self.sender and self.sender.result == 'paused' and time.monotonic() - self.sender.paused_at > RESUME_TTL_SECONDS:
+                self.sender.cancel()
+            for receiver in self.peer_receivers.values():
+                if receiver.paused_at is not None and time.monotonic() - receiver.paused_at > RESUME_TTL_SECONDS:
+                    receiver.abort()
+
     def serve(self):
         while not self.stop_event.is_set():
+            self.expire_transfers()
             if not self.slots.acquire(timeout=1):
                 continue
             try:
@@ -387,10 +418,29 @@ class Companion:
             def send(message):
                 with self.lock:
                     if self.active_stream is not destination or self.connection_id != connection_id or self.stop_event.is_set():
-                        raise ValueError('Phone connection changed')
+                        raise OSError('Phone connection changed')
                     write_frame(destination, message)
+            if self.sender and self.sender.result == 'paused':
+                raise ValueError('Resume or cancel the paused transfer first')
+            self.sender_peer = (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))
             self.sender = FileSender(self.directory / 'OutgoingFiles', send, self.report)
             self.sender.start(path)
+        self.emit_state()
+
+    def resume_file(self, connection_id):
+        with self.lock:
+            destination = self.active_stream
+            identity = (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))
+            if destination is None or not connection_id or connection_id != self.connection_id or identity != self.sender_peer:
+                raise ValueError('Reconnect the original paired phone to resume')
+            if not self.sender:
+                raise ValueError('No paused transfer')
+            def send(message):
+                with self.lock:
+                    if self.active_stream is not destination or self.connection_id != connection_id or self.stop_event.is_set():
+                        raise OSError('Phone connection changed')
+                    write_frame(destination, message)
+            self.sender.resume(send)
         self.emit_state()
 
     def push_clipboard(self):
@@ -410,6 +460,11 @@ class Companion:
 
     def forget(self, peer_id):
         with self.lock:
+            for identity in list(self.peer_receivers):
+                if identity[0] == peer_id:
+                    self.peer_receivers.pop(identity).abort()
+            if self.sender_peer and self.sender_peer[0] == peer_id and self.sender:
+                self.sender.cancel()
             if peer_id in self.peers:
                 del self.peers[peer_id]
                 self.save_peers()
@@ -429,7 +484,7 @@ class Companion:
         with self.lock:
             if self.sender:
                 self.sender.cancel()
-            for receiver in self.receivers:
+            for receiver in set(self.peer_receivers.values()) | self.receivers:
                 receiver.abort()
             for connection in self.connections:
                 try:
@@ -500,6 +555,11 @@ def main():
                         companion.push_clipboard()
                     elif command.startswith('/send '):
                         companion.start_file(command[6:], companion.connection_id)
+                    elif command == '/resume':
+                        companion.resume_file(companion.connection_id)
+                    elif command == '/cancel':
+                        if companion.sender:
+                            companion.sender.cancel()
                     elif command == '/code':
                         address = args.address or detect_address()
                         companion.rotate_code()

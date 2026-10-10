@@ -15,6 +15,7 @@ final class CompanionController: ObservableObject {
     @Published private(set) var lastAction = "Starting companion…"
     @Published private(set) var errorMessage: String?
     @Published private(set) var clipboardEnabled = UserDefaults.standard.object(forKey: "clipboardEnabled") as? Bool ?? true
+    @Published private(set) var fileCanResume = false
     @Published private(set) var fileSending = false
     @Published private(set) var fileSendStatus = "idle"
     @Published private(set) var sentBytes: Int64 = 0
@@ -63,6 +64,7 @@ final class CompanionController: ObservableObject {
                 self.running = false
                 self.connected = false
                 self.fileSending = false
+                self.fileCanResume = false
                 self.fileSendStatus = "idle"
                 self.connectionId = ""
                 self.pairingURI = ""
@@ -119,6 +121,7 @@ final class CompanionController: ObservableObject {
         connectionId = value.connectionId ?? ""
         fileSending = value.fileSending ?? false
         fileSendStatus = value.fileSendStatus ?? "idle"
+        fileCanResume = value.fileCanResume ?? false
         sentBytes = value.sentBytes ?? 0
         fileSize = value.fileSize ?? 0
         lastAction = value.lastAction ?? "Ready"
@@ -163,6 +166,7 @@ final class CompanionController: ObservableObject {
             self?.command(["action": "sendFile", "path": url.path, "connectionId": destination])
         }
     }
+    func resumeFileSend() { command(["action": "resumeFileSend", "connectionId": connectionId]) }
     func cancelFileSend() { command(["action": "cancelFileSend"]) }
     func showReceivedFiles() {
         let folder = FileManager.default.homeDirectoryForCurrentUser
@@ -204,6 +208,7 @@ final class CompanionController: ObservableObject {
         running = false
         connected = false
         fileSending = false
+        fileCanResume = false
         fileSendStatus = "idle"
         connectionId = ""
         pairingURI = ""

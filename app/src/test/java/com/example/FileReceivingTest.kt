@@ -53,17 +53,18 @@ class FileReceivingTest {
         override fun delete(uri: Uri, s: String?, a: Array<out String>?) = 0
         override fun update(uri: Uri, v: ContentValues?, s: String?, a: Array<out String>?) = 0
     }
-    private class Fixture(timeout: Long = 30000) {
+    private class Fixture(timeout: Long = 30000, resumable: Boolean = false, resumeWindow: Long = TRANSFER_RESUME_WINDOW_MS) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val history = TestFileHistory()
         val job = SupervisorJob()
         val scope = CoroutineScope(job + Dispatchers.IO)
         val source = FileTransferTarget(PairedDevice("mac", "Mac", "pin", "key", "127.0.0.1", allowFileTransfer = true), 1)
         val target = AtomicReference<FileTransferTarget?>(source)
+        val permitted = java.util.concurrent.atomic.AtomicBoolean(resumable)
         val acks = CopyOnWriteArrayList<ProtocolMessage.FileAck>()
         val manager = FileReceivingManager(context, history, scope, { target.get() }, { message, _ ->
             acks.add(message as ProtocolMessage.FileAck); true
-        }, timeout)
+        }, timeout, retain = { permitted.get() }, resumeWindowMs = resumeWindow)
         val folder get() = File(context.filesDir, "received_files")
         suspend fun process(message: ProtocolMessage) = manager.process(message, source)
         suspend fun start(data: ByteArray, name: String = "🌉 notes.bin", hash: String = hash(data), id: String = "mac-file") =
@@ -92,6 +93,67 @@ class FileReceivingTest {
         provider.attachInfo(context, android.content.pm.ProviderInfo().apply { authority = "save-tests"; exported = true })
         ShadowContentResolver.registerProviderInternal("save-tests", provider)
         return file
+    }
+
+    @Test fun `disconnect resumes same peer offset and lost final acknowledgement returns receipt`() = runBlocking {
+        val fixture = Fixture(resumable = true)
+        try { with(fixture) {
+            val bytes = ByteArray(80000) { (it % 256).toByte() }
+            start(bytes)
+            val first = bytes.copyOfRange(0, FILE_CHUNK_SIZE)
+            process(ProtocolMessage.FileChunk("mac-file", 0, 2, 0, android.util.Base64.encodeToString(first, 2), first.size))
+            target.set(null)
+            withTimeout(3000) { while (history.values.values.single().status != TransferStatus.PAUSED) delay(10) }
+            val wrong = source.copy(device = source.device.copy(fingerprint = "changed"), session = 2)
+            target.set(wrong)
+            manager.process(ProtocolMessage.FileInit("mac-file", "🌉 notes.bin", bytes.size.toLong(), hash(bytes), resume = true), wrong)
+            assertEquals("REJECTED", acks.last().status)
+            val reconnected = source.copy(session = 2)
+            target.set(reconnected)
+            val init = ProtocolMessage.FileInit("mac-file", "🌉 notes.bin", bytes.size.toLong(), hash(bytes), resume = true)
+            manager.process(init.copy(sha256Checksum = "0".repeat(64)), reconnected)
+            assertEquals("REJECTED", acks.last().status)
+            manager.process(init, reconnected)
+            assertEquals(FILE_CHUNK_SIZE.toLong(), acks.last().receivedBytes)
+            val last = bytes.copyOfRange(FILE_CHUNK_SIZE, bytes.size)
+            manager.process(ProtocolMessage.FileChunk("mac-file", 1, 2, FILE_CHUNK_SIZE.toLong(), android.util.Base64.encodeToString(last, 2), last.size), reconnected)
+            assertEquals("COMPLETED", acks.last().status)
+            assertArrayEquals(bytes, File(history.values.values.single().filePath!!).readBytes())
+            manager.process(init, reconnected)
+            assertEquals("COMPLETED", acks.last().status)
+            assertEquals(hash(bytes), acks.last().sha256Checksum)
+            assertEquals(1, folder.listFiles()!!.size)
+        } } finally { fixture.close() }
+    }
+    @Test fun `revoking permission while disconnected removes resumable partial`() = runBlocking {
+        val fixture = Fixture(resumable = true)
+        try { with(fixture) {
+            start(byteArrayOf(1)); target.set(null)
+            withTimeout(3000) { while (history.values.values.single().status != TransferStatus.PAUSED) delay(10) }
+            permitted.set(false)
+            withTimeout(3000) { while (history.values.values.single().status != TransferStatus.FAILED) delay(10) }
+            assertTrue(folder.listFiles().isNullOrEmpty())
+        } } finally { fixture.close() }
+    }
+    @Test fun `expired paused receive is removed and shutdown retains verified copies only`() = runBlocking {
+        val fixture = Fixture(resumable = true, resumeWindow = 50)
+        try { with(fixture) {
+            start(byteArrayOf(1)); target.set(null)
+            withTimeout(3000) { while (history.values.values.single().status != TransferStatus.FAILED) delay(10) }
+            assertTrue(folder.listFiles().isNullOrEmpty())
+        } } finally { fixture.close() }
+    }
+    @Test fun `cancel paused incoming transfer cannot be resumed by Mac`() = runBlocking {
+        val fixture = Fixture(resumable = true)
+        try { with(fixture) {
+            start(byteArrayOf(1)); target.set(null)
+            withTimeout(3000) { while (history.values.values.single().status != TransferStatus.PAUSED) delay(10) }
+            manager.cancel("incoming-mac-file")
+            target.set(source)
+            process(ProtocolMessage.FileInit("mac-file", "🌉 notes.bin", 1, hash(byteArrayOf(1)), resume = true))
+            assertEquals("REJECTED", acks.last().status)
+            assertTrue(folder.listFiles().isNullOrEmpty())
+        } } finally { fixture.close() }
     }
 
     @Test fun `verified multichunk unicode file stays private and Save As copies exact bytes`() = scenario {

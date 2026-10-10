@@ -50,15 +50,22 @@ class FileSenderTests(unittest.TestCase):
         sender.start(source)
         self.assertTrue(sender.finished.wait(3))
         self.assertFalse(sender.busy)
-        self.assertEqual(list((self.root / 'spool').glob('.outgoing-*')), [])
+        paused = behavior in ('timeout', 'wrong-id', 'disconnect')
+        self.assertEqual(bool(list((self.root / 'spool').glob('.outgoing-*'))), paused)
+        if paused:
+            self.assertEqual(sender.result, 'paused')
+            self.assertFalse(any(frame['type'] == 'FILE_CANCEL' for frame in frames))
         success = behavior == 'valid'
         self.assertEqual('received and verified' in statuses[-1], success)
         if success:
             self.assertEqual(bytes(received), data)
             self.assertEqual(sender.sent_bytes, len(data))
-        elif behavior != 'disconnect':
+        elif not paused:
             self.assertEqual(frames[-1]['type'], 'FILE_CANCEL')
         self.assertTrue(all(name not in status and 'private' not in status for status in statuses))
+        if paused:
+            sender.cancel()
+            self.assertEqual(list((self.root / "spool").glob(".outgoing-*")), [])
         return frames
 
     def test_multichunk_unicode_exact_delivery(self):
@@ -89,6 +96,84 @@ class FileSenderTests(unittest.TestCase):
             self.assertEqual(frames, [])
             self.assertFalse(sender.busy)
             self.assertEqual(list((self.root / 'spool').glob('.outgoing-*')), [])
+
+    def test_resume_receiver_offset_and_lost_final_ack_use_original_snapshot(self):
+        from file_receiver import FileReceiver, CHUNK_SIZE
+        for lose_final in (False, True):
+            with self.subTest(lose_final=lose_final):
+                source = self.root / 'source'
+                data = bytes(range(256)) * 700
+                source.write_bytes(data)
+                receiver = FileReceiver(self.root / ('received-' + str(lose_final)))
+                frames = []
+                interrupted = False
+                def send(frame):
+                    nonlocal interrupted
+                    frames.append(frame)
+                    ack = receiver.process(frame, True)
+                    if not interrupted and frame['type'] == 'FILE_CHUNK' and (ack['status'] == 'COMPLETED' if lose_final else ack['receivedBytes'] == CHUNK_SIZE):
+                        interrupted = True
+                        receiver.pause()
+                        raise OSError('disconnect after receiver wrote chunk')
+                    sender.handle_ack(ack)
+                sender = FileSender(self.root / 'spool', send, lambda _: None, timeout=.05)
+                sender.start(source)
+                self.assertTrue(sender.finished.wait(3))
+                self.assertEqual('paused', sender.result)
+                source.write_bytes(b'changed original document')
+                before = len(frames)
+                sender.resume(send)
+                self.assertTrue(sender.finished.wait(3))
+                self.assertEqual('completed', sender.result)
+                self.assertEqual(frames[before]['resume'], True)
+                chunks = [f for f in frames[before:] if f['type'] == 'FILE_CHUNK']
+                if lose_final:
+                    self.assertEqual([], chunks)
+                else:
+                    self.assertEqual(CHUNK_SIZE, chunks[0]['offset'])
+                self.assertEqual(data, receiver.last_saved.read_bytes())
+                self.assertEqual(1, len(list(receiver.directory.iterdir())))
+
+    def test_resume_rejects_corrupt_snapshot_and_expiry(self):
+        for expired in (False, True, "missing"):
+            source = self.root / 'source'
+            source.write_bytes(b'hello')
+            sender = FileSender(self.root / 'spool', lambda _: None, lambda _: None, timeout=.02)
+            sender.start(source)
+            self.assertTrue(sender.finished.wait(3))
+            if expired is True:
+                sender.paused_at -= 601
+                with self.assertRaises(ValueError): sender.resume(lambda _: self.fail('expired snapshot sent'))
+            else:
+                if expired == 'missing':
+                    sender.snapshot.unlink()
+                else:
+                    sender.snapshot.write_bytes(b'other')
+                sender.resume(lambda _: self.fail('corrupt snapshot sent'))
+                self.assertTrue(sender.finished.wait(3))
+                self.assertEqual('failed', sender.result)
+            self.assertEqual([], list((self.root / 'spool').glob('.outgoing-*')))
+
+    def test_backend_resume_refuses_different_identity(self):
+        companion = Companion(self.root / 'peer', host='127.0.0.1', port=0, event_sink=lambda _: None)
+        try:
+            source = self.root / 'source'
+            source.write_bytes(b'x')
+            companion.active_id = 'original'
+            companion.peers['original'] = {'publicKey': 'pinned'}
+            companion.active_stream = io.BytesIO()
+            companion.connection_id = 'first'
+            companion.start_file(source, 'first')
+            companion.sender.interrupt()
+            self.assertTrue(companion.sender.finished.wait(3))
+            companion.active_id = 'different'
+            companion.connection_id = 'second'
+            with self.assertRaises(ValueError): companion.resume_file('second')
+            companion.active_id = 'original'
+            companion.peers['original']['publicKey'] = 'changed'
+            with self.assertRaises(ValueError): companion.resume_file('second')
+        finally:
+            companion.close()
 
     def test_duplicate_start_is_rejected(self):
         source = self.root / 'source'

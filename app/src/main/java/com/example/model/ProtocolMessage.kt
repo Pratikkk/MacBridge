@@ -49,7 +49,8 @@ sealed class ProtocolMessage(val type: String) {
         val fileSize: Long,
         val sha256Checksum: String,
         val mimeType: String = "application/octet-stream",
-        val chunkSize: Int = 64 * 1024
+        val chunkSize: Int = 64 * 1024,
+        val resume: Boolean = false
     ) : ProtocolMessage("FILE_INIT")
 
     data class FileChunk(

@@ -48,7 +48,7 @@ class SecureTransportIntegrationTest {
     }
 
     private lateinit var peerDirectory: File
-    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, test: (PairingCode) -> Unit) {
+    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
         val directory = Files.createTempDirectory("macbridge-integration-").toFile()
@@ -65,10 +65,17 @@ class SecureTransportIntegrationTest {
                 if peer.active_stream is not None: break
                 time.sleep(.05)
             peer.start_file(sys.argv[3],peer.connection_id)
+            original=peer.connection_id
             peer.sender.finished.wait(20)
+            if sys.argv[4] == 'resume':
+                for _ in range(400):
+                    if peer.active_stream is not None and peer.connection_id != original: break
+                    time.sleep(.05)
+                peer.resume_file(peer.connection_id)
+                peer.sender.finished.wait(20)
             while True: time.sleep(1)
         """.trimIndent()
-        val command = if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath)
+        val command = if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")
             else listOf("python3", File(root, "mac/macbridge.py").absolutePath,
                 "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",
                 "--address", "127.0.0.1", "--headless", "--echo") + (if (files) listOf("--files") else emptyList())
@@ -139,7 +146,7 @@ class SecureTransportIntegrationTest {
         val transport = SecureTransport(IdentityManager(context, true), scope,
             { message, _ -> if (message is ProtocolMessage.FileAck) acknowledgements.send(message) }, {})
         try { runBlocking(Dispatchers.IO) {
-            transport.pairDevice(code.device, code.secret) {}
+            val verified = transport.pairDevice(code.device, code.secret) {}
             val bytes = ByteArray(80000) { (it % 256).toByte() }
             val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
             assertTrue(transport.sendMessage(ProtocolMessage.FileInit("real-file", "🌉 test.bin", bytes.size.toLong(), hash)))
@@ -152,9 +159,24 @@ class SecureTransportIntegrationTest {
                 val ack = withTimeout(5000) { acknowledgements.receive() }
                 assertEquals(if (i == 1) "COMPLETED" else "IN_PROGRESS", ack.status)
                 if (i == 1) assertEquals(hash, ack.sha256Checksum)
+                else {
+                    transport.disconnect()
+                    delay(300)
+                    transport.connectToDevice(verified)
+                    withTimeout(10000) { transport.connectionState.first { it is ConnectionState.Connected } }
+                    assertTrue(transport.sendMessage(ProtocolMessage.FileInit("real-file", "🌉 test.bin", bytes.size.toLong(), hash, resume = true)))
+                    val checkpoint = withTimeout(5000) { acknowledgements.receive() }
+                    assertEquals("READY", checkpoint.status)
+                    assertEquals(65536L, checkpoint.receivedBytes)
+                }
             }
             val folder = File(peerDirectory, "ReceivedFiles")
             assertArrayEquals(bytes, folder.listFiles()!!.single().readBytes())
+            transport.sendMessage(ProtocolMessage.FileInit("real-file", "🌉 test.bin", bytes.size.toLong(), hash, resume = true))
+            val receipt = withTimeout(5000) { acknowledgements.receive() }
+            assertEquals("COMPLETED", receipt.status)
+            assertEquals(hash, receipt.sha256Checksum)
+            assertEquals(1, folder.listFiles()!!.size)
             transport.sendMessage(ProtocolMessage.FileInit("cancel-file", "cancel.bin", bytes.size.toLong(), hash))
             assertEquals("READY", withTimeout(5000) { acknowledgements.receive() }.status)
             transport.sendMessage(ProtocolMessage.FileCancel("cancel-file"))
@@ -164,11 +186,16 @@ class SecureTransportIntegrationTest {
     }
 
     @Test
-    fun `real Mac sender delivers verified private file to Android over TLS`() = withMac(sendsFile = true) { code ->
+    fun `real Mac sender delivers verified private file to Android over TLS`() = receiveMacFile(false)
+
+    @Test fun `real TLS Mac to phone transfer resumes after connection loss`() = receiveMacFile(true)
+
+    private fun receiveMacFile(resume: Boolean) = withMac(sendsFile = true, resumeFile = resume) { code ->
         val context = ApplicationProvider.getApplicationContext<Context>()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val history = TestFileHistory()
         val complete = CompletableDeferred<ProtocolMessage.FileAck>()
+        val interrupted = CompletableDeferred<Unit>()
         lateinit var receiver: com.example.manager.FileReceivingManager
         lateinit var transport: SecureTransport
         suspend fun target(): com.example.manager.FileTransferTarget? {
@@ -179,13 +206,23 @@ class SecureTransportIntegrationTest {
             target()?.let { receiver.process(message, it) }
         }, {})
         receiver = com.example.manager.FileReceivingManager(context, history, scope, { target() }, { message, _ ->
-            val sent = transport.sendMessage(message)
+            val sent = if (resume && !interrupted.isCompleted && message is ProtocolMessage.FileAck && message.status == "IN_PROGRESS") {
+                transport.disconnect()
+                interrupted.complete(Unit)
+                false
+            } else transport.sendMessage(message)
             if (message is ProtocolMessage.FileAck && message.status == "COMPLETED") complete.complete(message)
             sent
-        })
+        }, retain = { true })
         try { runBlocking(Dispatchers.IO) {
-            transport.pairDevice(code.device, code.secret) {}
-            val ack = withTimeout(10000) { complete.await() }
+            val verified = transport.pairDevice(code.device, code.secret) {}
+            if (resume) {
+                withTimeout(10000) { interrupted.await() }
+                delay(500)
+                transport.connectToDevice(verified)
+                withTimeout(10000) { transport.connectionState.first { it is ConnectionState.Connected } }
+            }
+            val ack = withTimeout(15000) { complete.await() }
             assertEquals(80000, ack.receivedBytes)
             val item = history.values.values.single()
             assertEquals(com.example.model.TransferStatus.COMPLETED, item.status)

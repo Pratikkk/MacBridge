@@ -7,6 +7,7 @@ import android.util.Base64
 import com.example.data.FileTransferDao
 import com.example.model.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -21,20 +22,29 @@ class FileReceivingManager(
     private val scope: CoroutineScope,
     private val target: suspend () -> FileTransferTarget?,
     private val send: suspend (ProtocolMessage, FileTransferTarget) -> Boolean,
-    private val idleTimeoutMs: Long = 30000
+    private val idleTimeoutMs: Long = 30000,
+    private val retain: suspend (FileTransferTarget) -> Boolean = { false },
+    private val resumeWindowMs: Long = TRANSFER_RESUME_WINDOW_MS
 ) {
     private val folder = File(context.filesDir, "received_files")
     private val mutex = Mutex()
-    private data class Incoming(val id: String, val source: FileTransferTarget, var item: FileTransferItem,
+    private data class Incoming(val id: String, var source: FileTransferTarget, var item: FileTransferItem,
         val temporary: File, val output: FileOutputStream, val digest: MessageDigest,
         var index: Int = 0, var activity: Long = System.nanoTime())
     private var active: Incoming? = null
+    private var pausedAt: Long? = null
+    private val cancelled = LinkedHashMap<String, FileTransferTarget>()
+    private val receipts = LinkedHashMap<String, Pair<FileTransferTarget, FileTransferItem>>()
+    private fun samePeer(a: FileTransferTarget, b: FileTransferTarget) = a.device.id == b.device.id && a.device.fingerprint == b.device.fingerprint
     private fun sameSession(a: FileTransferTarget?, b: FileTransferTarget): Boolean =
         a != null && a.device.id == b.device.id && a.device.fingerprint == b.device.fingerprint && a.session == b.session
     private val initialized = scope.async(Dispatchers.IO) {
         check(folder.mkdirs() || folder.isDirectory)
         folder.listFiles()?.filter { it.name.startsWith(".incoming-") }?.forEach { it.delete() }
         history.failInterruptedIncoming()
+        history.getAllTransfers().first().filter { it.direction == TransferDirection.INCOMING && it.status == TransferStatus.PAUSED }.forEach {
+            history.insertOrUpdate(it.copy(status = TransferStatus.FAILED, errorMessage = "App restarted. Ask your Mac to send the file again."))
+        }
     }
     init {
         scope.launch(Dispatchers.IO) {
@@ -44,9 +54,16 @@ class FileReceivingManager(
                     delay(250)
                     mutex.withLock {
                         val value = active ?: return@withLock
-                        if (!sameSession(target(), value.source) || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs) {
-                            abort("Interrupted. Ask your Mac to send the file again.")
+                        if (!retain(value.source) && (!sameSession(target(), value.source) || pausedAt != null || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs)) {
+                            abort("File sharing permission or identity changed.")
                             send(ProtocolMessage.FileAck(value.id, value.item.transferredBytes, "REJECTED"), value.source)
+                        } else if (pausedAt?.let { (System.nanoTime() - it) / 1_000_000 > resumeWindowMs } == true) {
+                            abort("Paused transfer expired. Ask your Mac to send it again.")
+                        } else if (pausedAt == null && (!sameSession(target(), value.source) || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs)) {
+                            value.output.flush()
+                            pausedAt = System.nanoTime()
+                            value.item = value.item.copy(status = TransferStatus.PAUSED, errorMessage = null)
+                            history.insertOrUpdate(value.item)
                         }
                     }
                 }
@@ -70,25 +87,65 @@ class FileReceivingManager(
                 send(ProtocolMessage.FileAck(id, count, status, hash), source)
             }
             if (!sameSession(target(), source)) {
-                if (active?.let { sameSession(it.source, source) } == true) abort("File sharing was disabled or the connection changed.")
+                if (active?.let { samePeer(it.source, source) } == true && !retain(source)) abort("File sharing was disabled or the identity changed.")
                 acknowledge("REJECTED")
                 return@withLock
             }
             try {
                 if (message is ProtocolMessage.FileCancel) {
-                    if (active?.id == id && active?.let { sameSession(it.source, source) } == true) abort("Cancelled by your Mac.")
+                    cancelled[id] = source
+                    if (cancelled.size > 64) cancelled.remove(cancelled.keys.first())
+                    if (active?.id == id && active?.let { samePeer(it.source, source) } == true) abort("Cancelled by your Mac.")
                     acknowledge("CANCELLED")
                     return@withLock
                 }
                 if (message is ProtocolMessage.FileInit) {
+                    if (message.resume) {
+                        if (cancelled[id]?.let { samePeer(it, source) } == true) { acknowledge("REJECTED"); return@withLock }
+                        val receipt = receipts[id]
+                        if (receipt != null && samePeer(receipt.first, source) && receipt.second.fileSize == message.fileSize && receipt.second.fileName == safeName(message.fileName) && receipt.second.sha256Checksum == message.sha256Checksum && message.chunkSize == FILE_CHUNK_SIZE) {
+                            acknowledge("COMPLETED", receipt.second.fileSize, receipt.second.sha256Checksum)
+                            return@withLock
+                        }
+                        val partial = active
+                        if (partial != null && partial.id == id && samePeer(partial.source, source)) {
+                            if (partial.item.fileSize != message.fileSize || partial.item.fileName != safeName(message.fileName) || partial.item.sha256Checksum != message.sha256Checksum || message.chunkSize != FILE_CHUNK_SIZE) {
+                                acknowledge("REJECTED"); return@withLock
+                            }
+                            if (pausedAt?.let { (System.nanoTime() - it) / 1_000_000 > resumeWindowMs } == true) {
+                                abort("Paused transfer expired.")
+                            } else {
+                                partial.output.flush()
+                                require(partial.temporary.length() == partial.item.transferredBytes)
+                                partial.digest.reset()
+                                partial.temporary.inputStream().use { prefix ->
+                                    val buffer = ByteArray(FILE_CHUNK_SIZE)
+                                    while (true) {
+                                        ensureActive()
+                                        val n = prefix.read(buffer)
+                                        if (n < 0) break
+                                        partial.digest.update(buffer, 0, n)
+                                    }
+                                }
+                                partial.source = source
+                                partial.activity = System.nanoTime()
+                                pausedAt = null
+                                partial.item = partial.item.copy(status = TransferStatus.TRANSFERRING)
+                                history.insertOrUpdate(partial.item)
+                                acknowledge("READY", partial.item.transferredBytes)
+                                return@withLock
+                            }
+                        }
+                        acknowledge("REJECTED")
+                        return@withLock
+                    }
                     if (active != null) { acknowledge("BUSY"); return@withLock }
                     require(message.fileSize in 0..MAX_FILE_BYTES && message.chunkSize == FILE_CHUNK_SIZE)
                     require(message.fileName.isNotEmpty() && message.fileName.length <= 256)
                     require(message.sha256Checksum.matches(Regex("[0-9a-f]{64}")))
                     if (history.getTransfer("incoming-$id") != null) { acknowledge("REJECTED"); return@withLock }
                     require(folder.usableSpace >= message.fileSize + 8 * 1024 * 1024)
-                    val name = message.fileName.replace('\\', '/').substringAfterLast('/')
-                        .filter { !it.isISOControl() }.trim(' ', '.').take(100).dropLastWhile { it.isHighSurrogate() }.ifEmpty { "document" }
+                    val name = safeName(message.fileName)
                     val temporary = File.createTempFile(".incoming-", ".part", folder)
                     val item = FileTransferItem("incoming-$id", name, message.fileSize,
                         direction = TransferDirection.INCOMING, status = TransferStatus.TRANSFERRING,
@@ -100,7 +157,7 @@ class FileReceivingManager(
                     return@withLock
                 }
                 val value = active
-                if (message !is ProtocolMessage.FileChunk || value == null || value.id != id || !sameSession(value.source, source)) {
+                if (message !is ProtocolMessage.FileChunk || value == null || value.id != id || pausedAt != null || !sameSession(value.source, source)) {
                     acknowledge("REJECTED"); return@withLock
                 }
                 val length = minOf(FILE_CHUNK_SIZE.toLong(), value.item.fileSize - value.item.transferredBytes).toInt()
@@ -126,6 +183,9 @@ class FileReceivingManager(
         }
     }
 
+    private fun safeName(name: String) = name.replace('\\', '/').substringAfterLast('/')
+        .filter { !it.isISOControl() }.trim(' ', '.').take(100).dropLastWhile { it.isHighSurrogate() }.ifEmpty { "document" }
+
     private suspend fun finish() {
         val value = active ?: return
         val hash = value.digest.digest().joinToString("") { "%02x".format(it) }
@@ -144,13 +204,17 @@ class FileReceivingManager(
             history.insertOrUpdate(value.item.copy(status = TransferStatus.COMPLETED,
                 calculatedChecksum = hash, filePath = destination.absolutePath))
         } catch (error: Exception) { destination.delete(); throw error }
+        receipts[value.id] = value.source to value.item
+        if (receipts.size > 64) receipts.remove(receipts.keys.first())
         active = null
+        pausedAt = null
         send(ProtocolMessage.FileAck(value.id, value.item.fileSize, "COMPLETED", hash), value.source)
     }
 
     private suspend fun abort(reason: String) {
         val value = active ?: return
         active = null
+        pausedAt = null
         runCatching { value.output.close() }
         value.temporary.delete()
         history.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = reason))
@@ -159,6 +223,8 @@ class FileReceivingManager(
     suspend fun cancel(transferId: String) = withContext(Dispatchers.IO) {
         mutex.withLock {
             val value = active?.takeIf { it.item.transferId == transferId } ?: return@withLock
+            cancelled[value.id] = value.source
+            if (cancelled.size > 64) cancelled.remove(cancelled.keys.first())
             abort("Cancelled. Ask your Mac to send the file again.")
             send(ProtocolMessage.FileAck(value.id, value.item.transferredBytes, "CANCELLED"), value.source)
         }

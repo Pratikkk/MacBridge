@@ -16,6 +16,7 @@ struct CompanionEvent: Decodable {
     let connectionId: String?
     let fileSending: Bool?
     let fileSendStatus: String?
+    let fileCanResume: Bool?
     let sentBytes: Int64?
     let fileSize: Int64?
     let endpoint: String?

@@ -57,6 +57,7 @@ object ProtocolCodec {
                 json.put("sha256Checksum", message.sha256Checksum)
                 json.put("mimeType", message.mimeType)
                 json.put("chunkSize", message.chunkSize)
+                json.put("resume", message.resume)
             }
             is ProtocolMessage.FileChunk -> {
                 json.put("transferId", message.transferId)
@@ -145,7 +146,8 @@ object ProtocolCodec {
                     fileSize = json.getLong("fileSize"),
                     sha256Checksum = json.getString("sha256Checksum"),
                     mimeType = json.optString("mimeType", "application/octet-stream"),
-                    chunkSize = json.optInt("chunkSize", 64 * 1024)
+                    chunkSize = json.optInt("chunkSize", 64 * 1024),
+                    resume = json.optBoolean("resume", false)
                 )
                 "FILE_CHUNK" -> ProtocolMessage.FileChunk(
                     transferId = json.getString("transferId"),

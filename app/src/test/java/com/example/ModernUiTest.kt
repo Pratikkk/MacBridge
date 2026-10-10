@@ -194,6 +194,13 @@ class ModernUiTest {
         compose.runOnIdle { assertEquals(1, selections) }
     }
 
+    @Test fun `paused sender explains why choosing another file is disabled`() {
+        compose.setContent { MyApplicationTheme { FileSendCard(true, false, { fail("Paused snapshot would be abandoned") }, {}, paused = true) } }
+        compose.onNodeWithTag("choose_file_button").assertIsNotEnabled()
+        compose.onNodeWithText("Transfer paused").assertExists()
+        compose.onNodeWithText("Resume or cancel the paused transfer below before choosing another file.").assertExists()
+    }
+
     @Test fun `Save As appears only for verified incoming files and disables while saving`() {
         var item by mutableStateOf(FileTransferItem("incoming-file", "🌉 document.bin", 1,
             direction = TransferDirection.INCOMING, status = TransferStatus.TRANSFERRING, sha256Checksum = "hash"))
@@ -206,6 +213,23 @@ class ModernUiTest {
         compose.runOnIdle { item = item.copy(calculatedChecksum = "hash") }
         compose.onNodeWithTag("save_file_incoming-file").performClick().assertIsNotEnabled()
         compose.runOnIdle { assertEquals(1, saves) }
+    }
+
+    @Test fun `paused outgoing recovery disables resume offline and keeps Cancel available`() {
+        var enabled by mutableStateOf(false)
+        var resumes = 0
+        var cancels = 0
+        val item = FileTransferItem("file-v1-paused", "🌉 document.bin", 80000,
+            direction = TransferDirection.OUTGOING, status = TransferStatus.PAUSED, sha256Checksum = "hash")
+        compose.setContent { MyApplicationTheme {
+            FileTransferCard(item, false, {}, { cancels++ }, canResume = enabled, onResume = { resumes++ })
+        } }
+        compose.onNodeWithText("Resume transfer").assertIsNotEnabled()
+        compose.onNodeWithText("Save As…").assertDoesNotExist()
+        compose.onNodeWithText("Cancel transfer").performClick()
+        compose.runOnIdle { assertEquals(1, cancels); enabled = true }
+        compose.onNodeWithText("Resume transfer").performClick()
+        compose.runOnIdle { assertEquals(1, resumes) }
     }
 
     @Test fun `Share tabs remain selectable with large text on narrow screens`() {

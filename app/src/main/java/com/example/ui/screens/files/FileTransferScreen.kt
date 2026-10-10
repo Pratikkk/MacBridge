@@ -55,7 +55,8 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item { ScreenTitle("Files", "Verified sharing in both directions.") }
         item {
-            FileSendCard(enabled, busy, onChoose = { picker.launch(arrayOf("*/*")) }, onDevices)
+            FileSendCard(enabled, busy, onChoose = { picker.launch(arrayOf("*/*")) }, onDevices,
+                paused = history.any { it.direction == TransferDirection.OUTGOING && it.status == TransferStatus.PAUSED })
         }
         item { Text("Recent files", style = MaterialTheme.typography.titleLarge) }
         if (history.isEmpty()) item {
@@ -67,6 +68,10 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
         }
         items(history, key = { it.transferId }) { item ->
             FileTransferCard(item, saving,
+                canResume = enabled && !busy,
+                onResume = { bridgeManager.scope.launch {
+                    if (!bridgeManager.fileTransferManager.resumeTransfer(item.transferId)) Toast.makeText(context, "Reconnect the original paired Mac to resume.", Toast.LENGTH_LONG).show()
+                } },
                 onSave = { pendingSave = item.transferId; saver.launch(item.fileName) },
                 onCancel = {
                     if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
@@ -78,14 +83,15 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
 }
 
 @Composable
-fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevices: () -> Unit) {
+fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevices: () -> Unit, paused: Boolean = false) {
     Panel {
         FeatureHeading("Send a document", Icons.Outlined.Description)
         Text("Phone → Mac · Up to 100 MB", color = Slate400, style = MaterialTheme.typography.bodyMedium)
-        Button(onClick = onChoose, enabled = enabled && !busy,
+        Button(onClick = onChoose, enabled = enabled && !busy && !paused,
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("choose_file_button")) {
-            Text(if (busy) "Transfer in progress…" else "Choose file")
+            Text(if (busy) "Transfer in progress…" else if (paused) "Transfer paused" else "Choose file")
         }
+        if (paused) Text("Resume or cancel the paused transfer below before choosing another file.", color = Slate400, style = MaterialTheme.typography.bodyMedium)
         if (!enabled) {
             Text("Connect your Mac and turn on File sharing in Devices.", color = Slate400,
                 style = MaterialTheme.typography.bodyMedium)
@@ -97,13 +103,13 @@ fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevice
             color = Slate400, style = MaterialTheme.typography.bodyMedium)
         Text("Receive: Mac menu → Send File to Phone… Then use Save As… below.", color = Slate400,
             style = MaterialTheme.typography.bodyMedium)
-        Text("Interrupted? Send the file again to retry.", color = Slate400,
+        Text("Interrupted? Reconnect the same device and resume within 10 minutes. Keep both apps running.", color = Slate400,
             style = MaterialTheme.typography.bodyMedium)
     }
 }
 
 @Composable
-fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit, onCancel: () -> Unit) {
+fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit, onCancel: () -> Unit, canResume: Boolean = false, onResume: () -> Unit = {}) {
     Panel {
         Text(item.fileName, style = MaterialTheme.typography.titleMedium)
         val incoming = item.direction == TransferDirection.INCOMING
@@ -116,15 +122,18 @@ fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit
             TransferStatus.TRANSFERRING -> "${if (incoming) "Receiving" else "Sending"} · ${item.transferredBytes / 1024} / ${item.fileSize / 1024} KB"
             TransferStatus.COMPLETED -> if (verified) (if (incoming) "Received & verified on this phone" else "Received & verified by Mac") else "Previous transfer record"
             TransferStatus.FAILED -> item.errorMessage ?: "Transfer failed. Send the file again to retry."
-            TransferStatus.PAUSED -> "Interrupted. Send the file again to retry."
+            TransferStatus.PAUSED -> if (incoming) "Paused. Reconnect and choose Resume File Sending on your Mac." else "Paused. Reconnect the same Mac to resume."
         }
         Text(label, color = if (item.status == TransferStatus.FAILED) RoseNeon else Slate400)
         if (item.status == TransferStatus.TRANSFERRING) {
             LinearProgressIndicator(progress = { if (item.fileSize > 0) (item.transferredBytes.toFloat() / item.fileSize).coerceIn(0f, 1f) else 0f },
                 modifier = Modifier.fillMaxWidth())
         }
-        if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING)) {
+        if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED)) {
             TextButton(onClick = onCancel) { Text("Cancel transfer") }
+        }
+        if (!incoming && item.status == TransferStatus.PAUSED) {
+            OutlinedButton(onClick = onResume, enabled = canResume, modifier = Modifier.fillMaxWidth()) { Text("Resume transfer") }
         }
         if (incoming && verified) {
             OutlinedButton(onClick = onSave, enabled = !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)

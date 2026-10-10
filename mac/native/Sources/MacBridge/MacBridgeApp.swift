@@ -49,10 +49,12 @@ struct CompanionMenu: View {
         Button("Send Clipboard to Phone", action: controller.pushClipboard)
             .disabled(!state.canSendClipboard)
         Button("Send File to Phone…", action: controller.sendFileToPhone)
-            .disabled(!controller.running || !controller.connected || controller.fileSending)
+            .disabled(!controller.running || !controller.connected || controller.fileSending || controller.fileSendStatus == "paused")
         Button("Show Received Files", action: controller.showReceivedFiles)
         if controller.fileSending {
             Text(controller.fileSize > 0 ? "Sending File: \(min(100, controller.sentBytes * 100 / controller.fileSize))%" : "Preparing File…")
+        } else if controller.fileSendStatus == "paused" {
+            Text("File Sending Paused — Reconnect to Resume")
         } else if controller.fileSendStatus == "completed" {
             Text("File Received and Verified by Phone")
         } else if controller.fileSendStatus == "failed" {
@@ -60,7 +62,9 @@ struct CompanionMenu: View {
         } else if controller.fileSendStatus == "cancelled" {
             Text("File Sending Cancelled")
         }
-        Button("Cancel File Sending", action: controller.cancelFileSend).disabled(!controller.fileSending)
+        Button("Resume File Sending", action: controller.resumeFileSend)
+            .disabled(!controller.fileCanResume || controller.fileSending)
+        Button("Cancel File Sending", action: controller.cancelFileSend).disabled(!controller.fileSending && controller.fileSendStatus != "paused")
         Divider()
         Toggle("Allow Clipboard Sharing", isOn: Binding(
             get: { controller.clipboardEnabled }, set: controller.setClipboard))

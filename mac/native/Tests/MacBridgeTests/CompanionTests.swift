@@ -54,6 +54,10 @@ struct CompanionChecks {
         try require(sendState.first?.connectionId == "session" && sendState.first?.fileSending == true &&
             sendState.first?.sentBytes == 65536 && sendState.first?.fileSize == 80000,
             "File sending state and connection identity did not decode")
+        var pausedBuffer = EventBuffer()
+        let paused = try pausedBuffer.append(Data(#"{"event":"state","fileSendStatus":"paused","fileCanResume":false}"#.utf8) + Data([10]))
+        try require(paused.first?.fileSendStatus == "paused" && paused.first?.fileCanResume == false, "Different peer must not enable resume")
+        print("PASS: paused transfer and original peer resume availability")
         print("PASS: file sending progress and original connection identity")
 
         let pipe = Pipe()
