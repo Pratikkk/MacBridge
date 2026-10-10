@@ -36,6 +36,14 @@ def detect_address():
     return address
 
 
+def create_listener(host, port):
+    # Bonjour can resolve IPv6; listen on both families when binding all interfaces.
+    dual = host == '0.0.0.0' and socket.has_dualstack_ipv6()
+    family = socket.AF_INET6 if dual or ':' in host else socket.AF_INET
+    return socket.create_server(('::' if dual else host, port), family=family,
+                                backlog=4, dualstack_ipv6=dual)
+
+
 def fingerprint(key):
     return ':'.join(f'{byte:02X}' for byte in hashlib.sha256(key).digest())
 
@@ -160,10 +168,7 @@ class Companion:
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.minimum_version = ssl.TLSVersion.TLSv1_2
         self.context.load_cert_chain(self.cert, self.key)
-        self.listener = socket.socket()
-        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.listener.bind((host, port))
-        self.listener.listen(4)
+        self.listener = create_listener(host, port)
         self.listener.settimeout(1)
         self.port = self.listener.getsockname()[1]
         self.slots = threading.BoundedSemaphore(4)
@@ -221,7 +226,9 @@ class Companion:
                 receivedBytes=receiver.received_bytes if receiver else 0, receivedFileSize=receiver.file_size if receiver else 0,
                 sentBytes=self.sender.sent_bytes if self.sender else 0, fileSize=self.sender.file_size if self.sender else 0, endpoint=f'{self.address}:{self.port}',
                 pairingURI=self.pairing_uri(self.address) if self.address and self.secret and remaining > 0 else '',
-                expiresAt=time.time() + remaining, lastAction=self.last_action)
+                expiresAt=time.time() + remaining, lastAction=self.last_action,
+                discovery=dict(id=self.device_id, name=self.name, fingerprint=self.pin, port=self.port,
+                    ipv6=self.listener.family == socket.AF_INET6) if self.address and not self.stop_event.is_set() else None)
         self.event_sink(value)
 
     def disconnect_phone(self):
@@ -276,7 +283,7 @@ class Companion:
                 self.receive_progress(receiver)
         elif action == 'reissueCode':
             address = command.get('address') or detect_address()
-            ipaddress.IPv4Address(address)
+            ipaddress.ip_address(address)
             self.address = address
             self.rotate_code()
             self.report('New pairing code ready')
@@ -584,7 +591,7 @@ def main():
     args = parser.parse_args()
     try:
         address = args.address or detect_address()
-        ipaddress.IPv4Address(address)
+        ipaddress.ip_address(address)
     except (OSError, ValueError) as error:
         parser.error(f'Cannot choose a Mac address: {error}. Use --address with the Mac LAN IP.')
     os.umask(0o077)

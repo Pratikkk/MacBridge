@@ -100,7 +100,10 @@ class PairingQrTest {
 
     @Test fun `scanned and pasted payloads resolve identical pins and secrets`() {
         val result = PairingScanResult.fromRaw("  $code\n") as PairingScanResult.Code
-        assertEquals(PairingCode.parse(code), PairingCode.parse(result.value))
+        val scanned = PairingCode.parse(result.value)
+        val pasted = PairingCode.parse(code)
+        assertEquals(scanned.device.copy(pairedTimestamp = 0), pasted.device.copy(pairedTimestamp = 0))
+        assertEquals(scanned.secret, pasted.secret)
         assertEquals(code, result.value)
     }
 }

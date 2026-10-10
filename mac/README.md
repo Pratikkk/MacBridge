@@ -1,6 +1,6 @@
 # MacBridge development companion
 
-MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, and phone revocation. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport, Bonjour advertising and notification mirroring remain future steps.
+MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, phone revocation, and Bonjour discovery. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport and notification mirroring remain future steps.
 
 ## Native Mac app
 
@@ -21,6 +21,8 @@ Only one companion may listen on port 8990. Stop a manually running CLI with `/q
 
 The UI receives status events through local process pipes. Clipboard text stays in the TLS engine and macOS pasteboard rather than passing through the status channel. The native app is not sandboxed for this development build; shipping and signing are separate milestones.
 
+The native app publishes `_macbridge._tcp` on the local network while its engine is running, and withdraws it on engine shutdown or app quit. **Settings → Status → Nearby discovery** reports availability. Android **Devices** shows nearby Macs; saved Macs use matching discovered addresses when you tap Connect. New Macs still require QR or pasted-code pairing. Bonjour publishes only public ID, name, fingerprint and IPv6 capability; every connection retains pinned-key verification. If macOS denies local-network access or the router blocks multicast, use the existing pairing flow. **Restart Companion** retries failed publication. The standalone CLI does not advertise Bonjour.
+
 ## Try it with an Android phone
 
 1. Connect the Mac and phone to the same trusted local network. The Mac may use Ethernet while the phone uses the same router's Wi-Fi; guest Wi-Fi may isolate devices.
@@ -39,7 +41,7 @@ The UI receives status events through local process pipes. Clipboard text stays 
 
 Pairing codes work once. Use `/code` to issue a fresh code. Reconnecting a paired phone requires its stored private key, not another code. Use `/peers` to list phone IDs and `/forget ID` to revoke a phone on the Mac. Use **Devices → Forget this Mac** to revoke the Mac on Android. Revocation is local to each endpoint; revoke on both sides to fully reset a pairing.
 
-Guest networks or client isolation can prevent communication. Allow the development peer through the Mac firewall if macOS asks. The first version uses the IP in the code; if it changes, issue a fresh pairing code. The Android Quick Settings tile and background action are subject to Android's clipboard access restrictions; foreground sharing is the reliable first path.
+Guest networks or client isolation can prevent communication. Allow the development peer through the Mac firewall if macOS asks. Native Bonjour discovery can locate a saved Mac after its IP changes; if discovery is unavailable, issue a fresh pairing code. The listener supports IPv4 and IPv6 where dual-stack sockets are available; automatic pairing-address selection remains IPv4, with an explicit IPv6 `--address` supported by the CLI. The Android Quick Settings tile and background action are subject to Android's clipboard access restrictions; foreground sharing is the reliable first path.
 
 ## Security and storage
 

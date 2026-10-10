@@ -13,6 +13,7 @@ import com.example.model.ProtocolMessage
 import com.example.network.MacSimulatorBench
 import com.example.network.NsdDiscoveryManager
 import com.example.network.SecureTransport
+import com.example.network.discoveryEndpoint
 import com.example.network.PairingCode
 import com.example.network.PairingFailure
 import com.example.service.MacBridgeForegroundService
@@ -51,8 +52,7 @@ class BridgeManager(
 
     val nsdManager = NsdDiscoveryManager(
         context = context,
-        deviceId = identityManager.deviceId,
-        deviceFingerprint = identityManager.getFingerprint()
+        deviceId = identityManager.deviceId
     )
 
     // App-specific notification mirror filter preferences
@@ -145,10 +145,13 @@ class BridgeManager(
     }
 
     fun connectToDevice(device: PairedDevice, fallbackIp: String? = null) {
-        val targetIp = fallbackIp ?: device.lastKnownIp
         scope.launch(Dispatchers.IO) {
             val saved = database.pairedDeviceDao().getDeviceById(device.id)
-            if (saved != null && !saved.isBlocked) secureTransport.connectToDevice(saved, targetIp, saved.port)
+            if (saved != null && !saved.isBlocked) {
+                val hint = if (fallbackIp == null) discoveryEndpoint(saved, nsdManager.discoveredPeers.value) else null
+                val target = saved.copy(lastKnownIp = fallbackIp ?: hint?.host ?: saved.lastKnownIp, port = hint?.port ?: saved.port)
+                secureTransport.connectToDevice(target, target.lastKnownIp, target.port)
+            }
         }
     }
 

@@ -43,6 +43,18 @@ class ModernUiTest {
     private val mac = PairedDevice("mac1", "My Mac", "AB:".repeat(31) + "AB", "pin", "192.168.0.2", allowClipboard = true)
     private val connected = ConnectionState.Connected(mac, mac.lastKnownIp, mac.port)
 
+    @Test fun `nearby Mac requires QR pairing rather than trusting discovery`() {
+        var pairRequests = 0
+        val peer = DiscoveredPeer("nearby", "Nearby Mac 🌉", "192.168.0.2", 8990, "untrusted-hint")
+        compose.setContent { MyApplicationTheme {
+            com.example.ui.screens.devices.NearbyMacCard(peer) { pairRequests++ }
+        } }
+        compose.onNodeWithText("Nearby Mac 🌉").assertIsDisplayed()
+        compose.onNodeWithText("Pair with QR code").performClick()
+        compose.onAllNodesWithText("Connect").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(1, pairRequests) }
+    }
+
     @Test fun `receiving transfer offers explicit receiving cancellation`() {
         var cancels = 0
         val item = com.example.model.FileTransferItem(transferId = "incoming-test", fileName = "file.bin", fileSize = 80000,

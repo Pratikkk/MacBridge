@@ -201,6 +201,7 @@ struct CompanionSettingsView: View {
                 connected: controller.connected, clipboardEnabled: controller.clipboardEnabled,
                 phoneName: controller.phoneName).status)
             LabeledContent("Local address", value: controller.endpoint)
+            LabeledContent("Nearby discovery", value: controller.discoveryStatus)
             if controller.sending.visible { transferProgress("Sending to Phone", value: controller.sending) }
             if controller.receiving.visible { transferProgress("Receiving from Phone", value: controller.receiving) }
             Text(controller.errorMessage ?? controller.lastAction)

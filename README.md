@@ -66,6 +66,14 @@ Automated tests use injected scanner results and verify the real pairing protoco
 
 ## Android interface
 
+### Nearby Mac discovery
+
+The native Mac companion advertises `_macbridge._tcp` with Bonjour while its server runs. Android **Devices** lists nearby Macs and marks saved Macs found on the local network. Tap **Connect** on a saved Mac to use its discovered address when its ID and public-key fingerprint match the saved identity; the TLS connection still verifies the original pinned key. Discovery never pairs a Mac or changes permissions. New Macs use **Pair with QR code**, with pasted codes available as before.
+
+Discovery is callback-driven, caps its catalog at 32 services, resolves one service at a time, and clears stale results on network changes or shutdown. **Refresh** restarts discovery. If multicast or local-network access is unavailable, QR/pasted pairing and saved addresses remain available. Bonjour contains public identity metadata only, never pairing secrets or private keys.
+
+The Mac listener accepts IPv4 and IPv6 where dual-stack sockets are supported. Android prefers IPv4; older Android versions expose only the address selected by their NSD resolver. IPv6-only automatic pairing-address selection is still limited: the CLI supports an explicit IPv6 `--address`, while automatic Mac address selection currently uses IPv4. The standalone CLI does not publish Bonjour.
+
 The Android app uses a black-and-white palette with soft decorative blur behind the Home connection card. Text and controls are never blurred; older Android versions retain the gradient background.
 
 - **Home**: connection status and pair/connect/cancel, with direct Clipboard and Files shortcuts once a Mac is paired. If several Macs are saved, choose one in Devices.

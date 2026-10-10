@@ -16,9 +16,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class, qualifiers = "w412dp-h915dp")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ShareSheetUiTest {
     @get:Rule val compose = createComposeRule()
     private val mac = PairedDevice("mac", "My Mac", "pin", "key", "127.0.0.1", allowFileTransfer = true)

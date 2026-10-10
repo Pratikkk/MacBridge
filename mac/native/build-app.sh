@@ -28,6 +28,7 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>MacBridge connects to your paired Android phone on your local network to share clipboard text and files.</string>
+<key>NSBonjourServices</key><array><string>_macbridge._tcp</string></array>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST

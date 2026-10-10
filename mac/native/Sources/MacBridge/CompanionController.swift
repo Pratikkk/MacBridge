@@ -10,6 +10,8 @@ final class CompanionController: ObservableObject {
     @Published private(set) var phoneName = "Android Phone"
     @Published private(set) var peers: [PairedPhone] = []
     @Published private(set) var endpoint = "Starting companion…"
+    @Published private(set) var discoveryStatus = "Starting…"
+    private let bonjour = BonjourPublisher()
     @Published private(set) var pairingURI = ""
     @Published private(set) var expiresAt = Date.distantPast
     @Published private(set) var lastAction = "Starting companion…"
@@ -33,6 +35,7 @@ final class CompanionController: ObservableObject {
 
     func start() {
         guard child == nil else { return }
+        bonjour.onStatus = { [weak self] value in self?.update(\.discoveryStatus, value) }
         generation += 1
         let token = generation
         errorMessage = nil
@@ -64,6 +67,7 @@ final class CompanionController: ObservableObject {
             DispatchQueue.main.async {
                 guard let self, self.generation == token else { return }
                 self.child = nil
+                self.bonjour.stop()
                 self.input = nil
                 self.running = false
                 self.connected = false
@@ -115,6 +119,7 @@ final class CompanionController: ObservableObject {
             return
         }
         guard value.event == "state" else { return }
+        bonjour.apply(value.running == true ? value.discovery : nil)
         update(\.running, value.running ?? false)
         update(\.connected, value.connected ?? false)
         update(\.phoneName, value.phoneName ?? "Android Phone")
@@ -215,6 +220,7 @@ final class CompanionController: ObservableObject {
         }
     }
     func stop() {
+        bonjour.stop()
         generation += 1
         let previous = child
         child = nil

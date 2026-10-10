@@ -10,7 +10,7 @@ import sys
 import socket
 from unittest.mock import patch, Mock
 
-from macbridge import Companion, MAX_FRAME, detect_address, fingerprint, openssl, read_frame
+from macbridge import Companion, MAX_FRAME, detect_address, fingerprint, openssl, read_frame, create_listener
 
 
 class ChallengeStream:
@@ -165,6 +165,19 @@ class AuthenticationTests(unittest.TestCase):
         self.server.emit_state()
         self.assertEqual('', snapshots[-1]['pairingURI'])
         self.assertNotIn('publicKey', snapshots[-1]['peers'][0])
+        discovery = snapshots[-1]['discovery']
+        self.assertEqual({'id', 'name', 'fingerprint', 'port', 'ipv6'}, set(discovery))
+        self.assertEqual(self.server.pin, discovery['fingerprint'])
+        self.assertNotIn(self.server.secret, json.dumps(discovery))
+
+    def test_explicit_ipv6_pairing_address_preserves_identity(self):
+        from urllib.parse import parse_qs, urlparse
+        original_id, original_pin = self.server.device_id, self.server.pin
+        self.server.handle_command(dict(action='reissueCode', address='fd00::20'))
+        fields = parse_qs(urlparse(self.server.pairing_uri(self.server.address)).query)
+        self.assertEqual(['fd00::20'], fields['ip'])
+        self.assertEqual(original_id, self.server.device_id)
+        self.assertEqual(original_pin, self.server.pin)
 
     def test_forget_already_closed_phone_still_revokes_it(self):
         self.pair()
@@ -226,6 +239,28 @@ class DesktopControlTests(unittest.TestCase):
                     process.wait(timeout=5)
                 process.stdout.close()
                 process.stderr.close()
+
+
+class DiscoveryListenerTests(unittest.TestCase):
+    def test_ipv4_listener_is_reachable_and_reusable(self):
+        with create_listener('127.0.0.1', 0) as listener:
+            port = listener.getsockname()[1]
+            with socket.create_connection(('127.0.0.1', port), timeout=2):
+                stream, _ = listener.accept()
+                stream.close()
+        with create_listener('127.0.0.1', port):
+            pass
+
+    @unittest.skipUnless(socket.has_dualstack_ipv6(), 'OS has no dual-stack IPv6')
+    def test_bonjour_listener_accepts_ipv4_and_ipv6(self):
+        with create_listener('0.0.0.0', 0) as listener:
+            self.assertEqual(socket.AF_INET6, listener.family)
+            port = listener.getsockname()[1]
+            listener.settimeout(2)
+            for address in ['127.0.0.1', '::1']:
+                with socket.create_connection((address, port), timeout=2):
+                    stream, _ = listener.accept()
+                    stream.close()
 
 
 if __name__ == '__main__':

@@ -5,11 +5,49 @@ import AppKit
 // Standalone checks work with Command Line Tools, without installing full Xcode/XCTest.
 @main
 struct CompanionChecks {
+    final class RecordingService: NetService {
+        var publishes = 0
+        var stops = 0
+        override func publish() { publishes += 1 }
+        override func stop() { stops += 1 }
+    }
     struct Failure: Error { let message: String }
     static func require(_ value: Bool, _ message: String) throws {
         if !value { throw Failure(message: message) }
     }
     static func main() throws {
+        let identity = BonjourIdentity(id: "mac-public-id", name: String(repeating: "🌉", count: 100),
+            fingerprint: Array(repeating: "AB", count: 32).joined(separator: ":"), port: 8990, ipv6: true)
+        try require(identity.valid && identity.serviceName.utf8.count <= 63, "Bonjour descriptor is invalid")
+        try require(identity.txt.keys.sorted() == ["fingerprint", "id", "ipv6", "name"], "TXT must contain only public discovery metadata")
+        try require(identity.txt["name"]!.count <= 100 && String(data: identity.txt["name"]!, encoding: .utf8) != nil,
+            "Unicode service name must be bounded without splitting UTF-8")
+        var registrations: [RecordingService] = []
+        var discoveryStatus = ""
+        let publisher = BonjourPublisher(makeService: { value in
+            let service = RecordingService(domain: "local.", type: "_macbridge._tcp.", name: value.serviceName, port: Int32(value.port))
+            registrations.append(service)
+            return service
+        })
+        publisher.onStatus = { discoveryStatus = $0 }
+        publisher.apply(identity)
+        publisher.apply(identity)
+        try require(registrations.count == 1 && registrations[0].publishes == 1, "Unchanged events must not republish Bonjour")
+        publisher.netServiceDidPublish(registrations[0])
+        try require(discoveryStatus == "Available on your network", "Publication success was not presented")
+        let replacement = BonjourIdentity(id: identity.id, name: "New name", fingerprint: identity.fingerprint, port: 9000, ipv6: false)
+        publisher.apply(replacement)
+        try require(registrations.count == 2 && registrations[0].stops == 1, "Endpoint changes must withdraw the old advertisement")
+        publisher.netServiceDidPublish(registrations[0])
+        try require(discoveryStatus == "Starting…", "Late publication callback changed current status")
+        publisher.netService(registrations[1], didNotPublish: [:])
+        try require(discoveryStatus.contains("QR"), "Unavailable multicast must retain QR guidance")
+        publisher.stop()
+        try require(discoveryStatus == "Off" && registrations[1].stops == 2, "Shutdown must withdraw discovery")
+        publisher.apply(BonjourIdentity(id: "bad", name: "Bad", fingerprint: "invalid", port: 0, ipv6: true))
+        try require(registrations.count == 2, "Invalid metadata must not publish")
+        print("PASS: bounded public Bonjour metadata, idle suppression, replacement, failure and shutdown")
+
         let state = Data("{\"event\":\"state\",\"running\":true,\"phoneName\":\"Phone 🌉\",\"peers\":[{\"id\":\"phone-1\",\"name\":\"My phone\"}]}\n".utf8)
         let error = Data("{\"event\":\"error\",\"message\":\"No connected phone\"}\n".utf8)
         let split = state.firstIndex(of: 0xF0)! + 2

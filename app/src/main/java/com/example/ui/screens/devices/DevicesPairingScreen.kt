@@ -29,6 +29,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.example.manager.BridgeManager
 import com.example.model.ConnectionState
 import com.example.model.PairedDevice
+import com.example.model.DiscoveredPeer
+import com.example.network.discoveryEndpoint
 import com.example.network.PairingCode
 import com.example.network.PairingQrScanner
 import com.example.network.PairingScanResult
@@ -40,6 +42,8 @@ import kotlinx.coroutines.launch
 fun DevicesPairingScreen(bridgeManager: BridgeManager, modifier: Modifier = Modifier) {
     val devices by bridgeManager.pairedDevices.collectAsStateWithLifecycle()
     val state by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
+    val nearby by bridgeManager.nsdManager.discoveredPeers.collectAsStateWithLifecycle()
+    val discoveryUnavailable by bridgeManager.nsdManager.discoveryUnavailable.collectAsStateWithLifecycle()
     var showPairing by rememberSaveable { mutableStateOf(false) }
     // Keep one-time secrets in memory only, never in saved instance state.
     var input by remember { mutableStateOf("") }
@@ -63,6 +67,21 @@ fun DevicesPairingScreen(bridgeManager: BridgeManager, modifier: Modifier = Modi
                 { bridgeManager.unpairDevice(device) },
                 { cb, files, alerts -> bridgeManager.updateDevicePermissions(device, cb, files, alerts) },
                 connected, busy, onDisconnect = { bridgeManager.disconnect() })
+            if (discoveryEndpoint(device, nearby) != null) Text("Found on your local network", style = MaterialTheme.typography.bodySmall, color = Slate400)
+        }
+        val unpairedNearby = nearby.filter { peer -> devices.none { it.id == peer.id && it.fingerprint == peer.fingerprintHint } }.take(4)
+        if (unpairedNearby.isNotEmpty()) {
+            item { Text("Nearby Macs", style = MaterialTheme.typography.titleLarge) }
+            items(unpairedNearby, key = { "nearby-${it.id}" }) { peer ->
+                NearbyMacCard(peer) { showPairing = true; input = ""; status = null }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(if (discoveryUnavailable) "Discovery unavailable. QR pairing still works." else "Same Wi-Fi · QR pairing is always available.",
+                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = Slate400)
+                TextButton(onClick = { bridgeManager.nsdManager.refreshDiscovery() }) { Text("Refresh") }
+            }
         }
         if (devices.isEmpty() || showPairing) {
             item {
@@ -86,6 +105,16 @@ fun DevicesPairingScreen(bridgeManager: BridgeManager, modifier: Modifier = Modi
             Text("Keep both devices on the same local network. The Mac companion must be running to connect.", color = Slate400,
                 style = MaterialTheme.typography.bodyMedium)
         }
+    }
+}
+
+@Composable
+internal fun NearbyMacCard(peer: DiscoveredPeer, onPair: () -> Unit) {
+    Panel {
+        Text(peer.name, style = MaterialTheme.typography.titleMedium, maxLines = 2)
+        Text("Open this Mac’s companion to scan its QR code. Nearby discovery does not verify its identity.",
+            style = MaterialTheme.typography.bodySmall, color = Slate400)
+        OutlinedButton(onClick = onPair, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Pair with QR code") }
     }
 }
 

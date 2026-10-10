@@ -6,6 +6,7 @@ struct PairedPhone: Decodable, Identifiable, Equatable {
 }
 
 struct CompanionEvent: Decodable {
+    let discovery: BonjourIdentity?
     let event: String
     let running: Bool?
     let connected: Bool?
@@ -28,6 +29,24 @@ struct CompanionEvent: Decodable {
     let expiresAt: TimeInterval?
     let lastAction: String?
     let message: String?
+}
+
+struct BonjourIdentity: Decodable, Equatable {
+    let id: String
+    let name: String
+    let fingerprint: String
+    let port: Int
+    let ipv6: Bool
+    var valid: Bool {
+        !id.isEmpty && id.utf8.count <= 128 && id.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) } &&
+        (1...65535).contains(port) && fingerprint.range(of: "^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$", options: .regularExpression) != nil
+    }
+    var serviceName: String { "MacBridge-" + String(id.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }.prefix(12)) }
+    var txt: [String: Data] {
+        var boundedName = name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.map(String.init).joined()
+        while boundedName.utf8.count > 100 { boundedName.removeLast() }
+        return ["id": Data(id.utf8), "name": Data(boundedName.utf8), "fingerprint": Data(fingerprint.utf8), "ipv6": Data((ipv6 ? "1" : "0").utf8)]
+    }
 }
 
 /// stdout is a byte stream; JSON may span several reads or share a read.
