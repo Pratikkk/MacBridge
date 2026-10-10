@@ -13,6 +13,23 @@ open mac/native/dist/MacBridge.app
 
 Requires macOS 13+, the Swift command-line tools to build, and Python 3/OpenSSL on the Mac to run this development version. The build uses no downloaded Swift packages. The app bundle lives at `mac/native/dist/MacBridge.app`; it is signed locally for development and is not notarized for distribution.
 
+### Install for daily testing
+
+Quit MacBridge from its menu, then run from the repository root:
+
+```sh
+mac/native/install-app.sh
+open ~/Applications/MacBridge.app
+```
+
+This builds, verifies and installs the app in your user **Applications** folder. It stays there independently of repository build outputs and can be opened from Finder or Launchpad without a terminal. Future updates use the same command. `--destination /Applications` selects the shared Applications folder if you have write access. The installer refuses unrelated apps, symlink targets and invalid signatures; it stages a verified replacement before changing the existing app and restores the previous app if replacement fails. It requires Python 3 (3.9+) with SSL and OpenSSL, matching the companion's runtime lookup. Keep those dependencies installed for this testing version.
+
+The installation preserves the existing `MacBridgeDev` identity, pairing, received files and app preferences. Settings windows can be closed while the menu-bar companion continues running. **Quit MacBridge** stops sharing until you reopen it.
+
+In **Settings → General**, optionally enable **Open at Login**. It starts off for a new installation, uses Apple's [SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice) and reflects the actual macOS setting. If approval is needed, use **Allow in Login Items…**; changes made in System Settings refresh when the app becomes active. Login registration is offered only from an Applications folder so it does not point at a temporary repository build. Installing or updating does not enable it automatically. Turn it off before removing or moving the installed app.
+
+This is a local development-signed testing build with a native interface and the existing Python engine. Public Developer ID signing/notarization, fully Swift transport and Keychain identity storage remain separate release work.
+
 Click the **link icon in the menu bar**. The app has no Dock icon. Its native system menu shows connection status, **Send Clipboard to Phone**, **Send File to Phone…**, **Show Received Files**, and checkmarked **Allow Clipboard Sharing** / **Allow File Receiving** controls. All daily actions fit in the menu without scrolling. Choose **Pair a Phone…** to open the QR code in a separate settings window, **Manage Devices…** to manage paired phones, or **Settings…** for the local address, detailed status and **Restart Companion**. The menu and settings window follow the system appearance; the Mac no longer uses the Android-style dark dashboard. On Android open **Devices → Pair a Mac → Scan QR** and scan this code, or paste the pairing code. Review the displayed Mac identity and tap **Verify Identity & Pair**. Scanning requires Google Play services; first use may need internet to download the scanner module. Paste remains available if scanning fails. Codes expire after five minutes and are invalidated after successful pairing. **Generate New Code** refreshes the code and local address.
 
 Clipboard sharing starts enabled for compatibility with the working CLI and can be paused in the app. The sharing choices are saved across app restarts. Sending requires an authenticated connected phone. **Manage Devices… → Forget…** revokes the phone on the Mac and requires confirmation. **Quit MacBridge** stops the app's child server; **Restart Companion** restarts it without changing the identity.
@@ -65,6 +82,7 @@ Native UI protocol and QR decoding tests:
 
 ```sh
 mac/native/test-app.sh
+python3 -m unittest discover -s mac/native -p 'test_install_app.py' -v
 ```
 
 In Android Studio run the `testDebugUnitTest` Gradle task and `assembleDebug`. `SecureTransportIntegrationTest` starts a temporary loopback Mac peer and tests Android-to-Mac TLS pairing, Unicode text roundtrip, reconnect, wrong-pin rejection, consumed-code rejection, verified file delivery and cancellation. It requires Python 3 and OpenSSL on the test host; it does not read or write the real Mac clipboard.

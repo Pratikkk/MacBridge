@@ -1,10 +1,27 @@
 import Foundation
 import CoreImage
 import AppKit
+import ServiceManagement
 
 // Standalone checks work with Command Line Tools, without installing full Xcode/XCTest.
 @main
 struct CompanionChecks {
+    final class RecordingLoginItem: LoginItemService {
+        var status: SMAppService.Status = .notRegistered
+        var registrations = 0
+        var removals = 0
+        var fail = false
+        func register() throws {
+            registrations += 1
+            if fail { throw Failure(message: "Registration rejected") }
+            status = .requiresApproval
+        }
+        func unregister() throws {
+            removals += 1
+            if fail { throw Failure(message: "Removal rejected") }
+            status = .notRegistered
+        }
+    }
     final class RecordingService: NetService {
         var publishes = 0
         var stops = 0
@@ -15,7 +32,33 @@ struct CompanionChecks {
     static func require(_ value: Bool, _ message: String) throws {
         if !value { throw Failure(message: message) }
     }
-    static func main() throws {
+    @MainActor static func main() throws {
+        let loginService = RecordingLoginItem()
+        let login = LoginItemController(service: loginService)
+        try require(!login.requested && loginService.registrations == 0, "Login startup must not register itself")
+        login.setEnabled(true)
+        try require(login.requiresApproval && login.requested, "Pending approval must stay visible")
+        loginService.status = .enabled
+        login.refresh()
+        try require(login.requested && !login.requiresApproval, "OS approval must refresh")
+        loginService.status = .notRegistered
+        login.refresh()
+        try require(!login.requested, "External revocation must refresh")
+        loginService.fail = true
+        login.setEnabled(true)
+        try require(login.errorMessage != nil && !login.requested, "Failed registration must not claim enabled")
+        loginService.fail = false
+        loginService.status = .enabled
+        loginService.fail = true
+        login.setEnabled(false)
+        try require(login.requested && login.errorMessage != nil, "Failed removal must retain actual enabled state")
+        loginService.fail = false
+        login.setEnabled(false)
+        try require(!login.requested && loginService.removals == 2 && login.errorMessage == nil, "Explicit removal must clear error and OS state")
+        loginService.status = .notFound
+        login.refresh()
+        try require(!login.requested, "Missing app service must not claim enabled")
+        print("PASS: login opt-in, OS approval/revocation, failed registration, removal and missing service")
         func alertEvent(_ key: String, session: String = "session", text: String = "Body 🌉") throws -> CompanionEvent {
             let data = try JSONSerialization.data(withJSONObject: ["event": "notification", "operation": "post",
                 "connectionId": session, "notificationId": key, "appName": "Chat", "title": "Hello 世界", "text": text])

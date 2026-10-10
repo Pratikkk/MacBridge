@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -18,7 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CompanionWindows.shared.show(.status)
         return true
     }
-    func applicationDidBecomeActive(_ notification: Notification) { CompanionController.shared.refreshNotificationAccess() }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        CompanionController.shared.refreshNotificationAccess()
+        LoginItemController.shared.refresh()
+    }
     func applicationWillTerminate(_ notification: Notification) {
         CompanionController.shared.stop()
     }
@@ -109,6 +113,7 @@ final class CompanionWindows: ObservableObject {
 struct CompanionSettingsView: View {
     @ObservedObject var controller: CompanionController
     @ObservedObject var windows: CompanionWindows
+    @ObservedObject private var loginItem = LoginItemController.shared
     @State private var phoneToForget: PairedPhone?
     @State private var pairingQR = PairingQRCache()
 
@@ -212,6 +217,14 @@ struct CompanionSettingsView: View {
             Text("Sharing controls are available directly in the menu bar.")
                 .font(.callout).foregroundStyle(.secondary)
             Divider()
+            Toggle("Open at Login", isOn: Binding(get: { loginItem.requested }, set: loginItem.setEnabled))
+                .disabled(Bundle.main.bundleURL.deletingLastPathComponent().lastPathComponent != "Applications")
+            if Bundle.main.bundleURL.deletingLastPathComponent().lastPathComponent != "Applications" {
+                Text("Install MacBridge in Applications to open it at login.").font(.caption).foregroundStyle(.secondary)
+            } else if loginItem.requiresApproval {
+                Button("Allow in Login Items…", action: SMAppService.openSystemSettingsLoginItems)
+            }
+            if let message = loginItem.errorMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
             LabeledContent("Connection", value: CompanionMenuState(running: controller.running,
                 connected: controller.connected, clipboardEnabled: controller.clipboardEnabled,
                 phoneName: controller.phoneName).status)
