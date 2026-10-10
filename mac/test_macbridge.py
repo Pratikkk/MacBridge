@@ -75,6 +75,32 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual('phone', self.server.authenticate(stream))
         return stream
 
+    def test_notification_dismiss_commands_require_enabled_original_live_session(self):
+        token = '11111111-1111-1111-1111-111111111111'
+        events = []
+        self.server.event_sink = events.append
+        self.server.notifications = True
+        self.server.peers['phone'] = {'publicKey': 'pinned-phone-key', 'name': 'Phone'}
+        self.server.active_id = 'phone'
+        self.server.active_stream = io.BytesIO()
+        self.server.connection_id = 'original'
+        message = dict(type='NOTIFICATION', notificationId='key', packageName='com.chat', appName='Chat', title='Hello', text='World', dismissToken=token)
+        self.server.notification_mirror.process(message, True)
+        command = dict(action='dismissNotification', notificationId='key', actionToken=token, connectionId='original')
+        with self.assertRaises(ValueError): self.server.handle_command(dict(command, connectionId='new'))
+        self.server.notifications = False
+        with self.assertRaises(ValueError): self.server.handle_command(command)
+        self.server.notifications = True
+        self.server.handle_command(command)
+        frame = json.loads(self.server.active_stream.getvalue())
+        self.assertEqual('DISMISS', frame['actionType'])
+        self.assertEqual(token, frame['actionToken'])
+        with self.assertRaises(ValueError): self.server.handle_command(command)
+        self.server.notification_mirror.reset()
+        with self.assertRaises(ValueError): self.server.handle_command(command)
+        self.server.active_stream = None
+        with self.assertRaises(ValueError): self.server.handle_command(command)
+
     def test_valid_pair_persists_pin_and_reconnects_without_secret(self):
         self.pair()
         self.assertIn('phone', json.loads(self.server.peers_file.read_text()))

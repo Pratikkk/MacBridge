@@ -1,6 +1,6 @@
 # MacBridge development companion
 
-MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, phone revocation, and Bonjour discovery. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport and notification actions remain future steps.
+MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, phone revocation, and Bonjour discovery. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport and inline notification replies remain future steps.
 
 ## Native Mac app
 
@@ -53,7 +53,7 @@ Android production identity fails closed when Keystore is unavailable. An explic
 
 The development Mac identity and phone pins live in `~/Library/Application Support/MacBridgeDev`, using owner-only directory and file permissions. The Mac private key is currently an unencrypted file, not a Keychain key. Back up these files securely if you need to preserve the development identity. The self-signed certificate expires after one year; there is no automatic certificate renewal yet. Do not delete or rotate an identity casually: existing pins will no longer match.
 
-The Security screen lists implementation status and pending controls; it is not an independent security audit. Notification actions, inherited Firebase initialization, and broader abuse resistance remain unfinished.
+The Security screen lists implementation status and pending controls; it is not an independent security audit. Inline notification replies, inherited Firebase initialization, and broader abuse resistance remain unfinished.
 
 ## Validate
 
@@ -107,6 +107,8 @@ The native menu shows one concise progress row per direction (**To Phone**, **Fr
 
 Choose **Settings… → Notifications → Allow phone notifications** and approve the macOS alert request. In Android **Devices**, enable notification sharing for this Mac; in **Settings → Notifications**, grant Android access and choose apps. App filters and message previews start off. The compact menu stays unchanged; setup lives in the separate settings window.
 
-The native app uses Apple’s [UserNotifications framework](https://developer.apple.com/documentation/usernotifications/unusernotificationcenter) for local banners and Notification Center entries. It does not use Apple Push Notification service or a cloud relay for this feature. Alerts have opaque session-scoped identifiers, bounded text and catalogs, and no reply/dismiss controls. Android removal updates remove the corresponding Mac entry; disconnect, engine shutdown or disabling reception clears the app’s pending and displayed entries. macOS system notification settings can suppress banners independently.
+The native app uses Apple’s [UserNotifications framework](https://developer.apple.com/documentation/usernotifications/unusernotificationcenter) for local banners and Notification Center entries. It does not use Apple Push Notification service or a cloud relay for this feature. Alerts have opaque session-scoped identifiers, bounded text and catalogs, and an explicit Dismiss on Phone action for current clearable phone alerts; inline replies remain planned. Android removal updates remove the corresponding Mac entry; disconnect, engine shutdown or disabling reception clears the app’s pending and displayed entries. macOS system notification settings can suppress banners independently.
 
 Notification content is sent through the private engine status pipe only for validated notification events, never ordinary status snapshots. It remains in bounded memory rather than bridge files or diagnostic logs. macOS manages its own delivered notification storage. Existing alerts are not restored after restart or reconnect, and the CLI does not present alerts. See the root README for consent, preview behavior, delivery limits and manual verification.
+
+Choose **Dismiss on Phone** on an eligible alert to request Android removal. Native action categories use Apple’s [notification action API](https://developer.apple.com/documentation/UserNotifications/UNNotificationAction). Normal Mac close gestures remain local. Opaque handles and session IDs in action metadata are checked against the current in-memory catalog and engine; the engine sends only to the original live authenticated phone. Old banners after updates, disconnect or restart cannot authorize a new generation. The phone confirms API acceptance separately from its removal event, and no pending action is retried after reconnect. See the root README for platform race limitations and manual verification.

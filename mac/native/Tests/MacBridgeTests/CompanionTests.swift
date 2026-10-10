@@ -40,6 +40,26 @@ struct CompanionChecks {
         try require(alerts.items.isEmpty, "Session teardown retained notification content")
         print("PASS: bounded notification catalog, Unicode, duplicates, updates, stale sessions, removal and teardown")
 
+        let actionToken = "11111111-1111-1111-1111-111111111111"
+        let newActionToken = "22222222-2222-2222-2222-222222222222"
+        func actionable(_ token: String) throws -> CompanionEvent {
+            let value: [String: Any] = ["event": "notification", "operation": "post", "connectionId": "current",
+                "notificationId": "key", "appName": "Chat", "title": "Hello", "text": "World", "dismissToken": token]
+            return try JSONDecoder().decode(CompanionEvent.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        var actionCatalog = NotificationCatalog()
+        let actionAlert = try actionCatalog.post(actionable(actionToken), session: "current")!.0
+        try require(actionCatalog.takeDismiss(id: actionAlert.id, token: "wrong") == nil, "Wrong handle authorized dismissal")
+        try require(actionCatalog.takeDismiss(id: actionAlert.id, token: actionToken)?.key == "key", "Current handle did not route to original key")
+        try require(actionCatalog.takeDismiss(id: actionAlert.id, token: actionToken) == nil, "Handle reused")
+        _ = try actionCatalog.post(actionable(newActionToken), session: "current")
+        try require(actionCatalog.takeDismiss(id: actionAlert.id, token: actionToken) == nil, "Old banner dismissed replacement")
+        try require(actionCatalog.matchesResult(session: "current", key: "key", token: newActionToken), "Current result did not match")
+        try require(!actionCatalog.matchesResult(session: "old", key: "key", token: newActionToken), "Stale session result matched")
+        actionCatalog.reset()
+        try require(actionCatalog.takeDismiss(id: actionAlert.id, token: newActionToken) == nil, "Restart retained action handles")
+        print("PASS: dismiss handles bind original alert, reject stale/reused actions and clear across restart")
+
         let identity = BonjourIdentity(id: "mac-public-id", name: String(repeating: "🌉", count: 100),
             fingerprint: Array(repeating: "AB", count: 32).joined(separator: ":"), port: 8990, ipv6: true)
         try require(identity.valid && identity.serviceName.utf8.count <= 63, "Bonjour descriptor is invalid")

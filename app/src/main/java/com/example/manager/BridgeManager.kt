@@ -63,6 +63,7 @@ class BridgeManager(
     lateinit var fileTransferManager: FileTransferManager
     lateinit var macSimulator: MacSimulatorBench
 
+    internal val notificationActions = NotificationActions()
     private val notificationRelay by lazy { NotificationRelay(CoroutineScope(scope.coroutineContext + Dispatchers.IO),
         current = {
             val state = secureTransport.connectionState.value as? ConnectionState.Connected
@@ -70,7 +71,11 @@ class BridgeManager(
             if (state == null || state.isSimulated || saved == null || saved.isBlocked || saved.fingerprint != state.device.fingerprint) null
             else NotificationDestination(saved.id, saved.fingerprint, state.connectedSince, saved.allowNotifications)
         }, permitted = { isAppMirroringEnabled(it) && com.example.service.MacBridgeNotificationListener.isPermissionGranted(context) },
-        send = { msg, target -> secureTransport.sendMessage(msg, target.id, target.session) }) }
+        send = { msg, target ->
+            val sent = secureTransport.sendMessage(msg, target.id, target.session)
+            if (sent && msg is ProtocolMessage.NotificationMirror) msg.dismissToken?.let { notificationActions.bind(msg.notificationId, it, target) }
+            sent
+        }) }
 
     init { initSubsystems() }
 
@@ -111,6 +116,9 @@ class BridgeManager(
             }
         )
 
+        scope.launch {
+            secureTransport.connectionState.collect { if (it !is ConnectionState.Connected) notificationActions.clear() }
+        }
         // This version only initiates authenticated connections to the Mac.
         nsdManager.startDiscovery()
     }
@@ -163,11 +171,13 @@ class BridgeManager(
     }
 
     fun disconnect() {
+        notificationActions.clear()
         secureTransport.disconnect()
         MacBridgeForegroundService.stop(context)
     }
 
     fun unpairDevice(device: PairedDevice) {
+        notificationActions.clearTarget(device.id)
         scope.launch(Dispatchers.IO) {
             database.pairedDeviceDao().delete(device)
             if (secureTransport.isTargetDevice(device.id)) {
@@ -183,6 +193,7 @@ class BridgeManager(
         allowFiles: Boolean,
         allowNotifications: Boolean
     ) {
+        if (!allowNotifications) notificationActions.clearTarget(device.id)
         scope.launch(Dispatchers.IO) {
             val updated = device.copy(
                 allowClipboard = allowClipboard,
@@ -255,9 +266,11 @@ class BridgeManager(
         if (!notificationRelay.offer(target, ProtocolMessage.NotificationAction(notificationKey, "REMOVE"))) secureTransport.disconnect()
     }
     fun clearNotificationMirrors(packageName: String = "", deviceId: String? = null) {
+        val target = notificationDestination()
+        if (deviceId != null && target?.id != deviceId) return
         notificationRelay.invalidate()
-        val target = notificationDestination() ?: return
-        if (deviceId != null && target.id != deviceId) return
+        notificationActions.clear(packageName)
+        if (target == null) return
         if (!notificationRelay.offer(target, ProtocolMessage.NotificationAction(packageName, "CLEAR"))) secureTransport.disconnect()
     }
 
@@ -281,7 +294,20 @@ class BridgeManager(
             is ProtocolMessage.FileInit, is ProtocolMessage.FileChunk, is ProtocolMessage.FileCancel -> {
                 if (!state.isSimulated) fileReceivingManager.process(msg, FileTransferTarget(device, state.connectedSince))
             }
-            // Remote dismiss/reply actions are not implemented in this milestone.
+            is ProtocolMessage.NotificationAction -> {
+                val token = msg.actionToken
+                if (state.isSimulated || msg.actionType != "DISMISS" || token == null ||
+                    !token.matches(Regex("[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")) || msg.notificationId.toByteArray().size > 512) return
+                val target = NotificationDestination(device.id, device.fingerprint, state.connectedSince, device.allowNotifications)
+                val result = withContext(Dispatchers.Main) {
+                    // Recheck the original connection immediately before touching the system listener.
+                    val live = secureTransport.connectionState.value as? ConnectionState.Connected
+                    if (live?.device?.id != target.id || live.connectedSince != target.session) "STALE"
+                    else com.example.service.MacBridgeNotificationListener.dismiss(this@BridgeManager, msg.notificationId, token, target)
+                }
+                secureTransport.sendMessage(ProtocolMessage.NotificationAction(msg.notificationId, "DISMISS_RESULT",
+                    actionToken = token, status = result), target.id, target.session)
+            }
             else -> {}
         }
     }

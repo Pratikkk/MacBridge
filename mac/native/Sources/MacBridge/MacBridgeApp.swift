@@ -199,7 +199,7 @@ struct CompanionSettingsView: View {
             Toggle("Allow phone notifications", isOn: Binding(get: { controller.notificationsEnabled }, set: controller.setNotifications))
             Text(controller.notificationStatus).font(.callout).foregroundStyle(.secondary)
             Text("On Android, enable notification sharing for this Mac in Devices. In Settings → Notifications, grant access and select apps. Previews start hidden on your phone.").font(.callout)
-            Text("Alerts are cleared when sharing stops or the phone disconnects. Existing phone notifications are never replayed. Dismiss and reply actions are planned.").font(.callout).foregroundStyle(.secondary)
+            Text("Alerts are cleared when sharing stops or the phone disconnects. Existing phone notifications are never replayed. Use Dismiss on Phone on an eligible alert to remove it from Android. Closing a Mac alert affects only the Mac. Replies are planned.").font(.callout).foregroundStyle(.secondary)
             Button("Open macOS notification settings") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) }
             }

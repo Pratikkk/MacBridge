@@ -40,6 +40,10 @@ final class CompanionController: ObservableObject {
     func start() {
         guard child == nil else { return }
         alerts.onStatus = { [weak self] value in self?.update(\.notificationStatus, value) }
+        alerts.onDismiss = { [weak self] key, token, session in
+            guard let self, self.running, self.connected, self.notificationsEnabled, self.connectionId == session else { return }
+            self.command(["action": "dismissNotification", "notificationId": key, "actionToken": token, "connectionId": session])
+        }
         alerts.onAccessDenied = { [weak self] in self?.setNotifications(false) }
         alerts.refreshPermission()
         bonjour.onStatus = { [weak self] value in self?.update(\.discoveryStatus, value) }

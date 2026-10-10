@@ -79,13 +79,16 @@ sealed class ProtocolMessage(val type: String) {
         val text: String,
         val timestamp: Long = System.currentTimeMillis(),
         val hasReplyAction: Boolean = false,
-        val isDismissed: Boolean = false
+        val isDismissed: Boolean = false,
+        val dismissToken: String? = null
     ) : ProtocolMessage("NOTIFICATION")
 
     data class NotificationAction(
         val notificationId: String,
-        val actionType: String, // "DISMISS" or "REPLY"
-        val replyText: String? = null
+        val actionType: String, // REMOVE/CLEAR from phone; DISMISS request and DISMISS_RESULT response.
+        val replyText: String? = null,
+        val actionToken: String? = null,
+        val status: String? = null
     ) : ProtocolMessage("NOTIFICATION_ACTION")
 }
 

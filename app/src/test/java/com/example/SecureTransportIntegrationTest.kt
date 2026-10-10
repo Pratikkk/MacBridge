@@ -69,8 +69,40 @@ class SecureTransportIntegrationTest {
         } } finally { transport.stop(); scope.cancel() }
     }
 
+    @Test
+    fun `dismiss request and result round trip over authenticated TLS with generation handle`() = withMac(notifications = true, dismiss = true) { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val request = CompletableDeferred<ProtocolMessage.NotificationAction>()
+        val echoed = CompletableDeferred<ProtocolMessage.ClipboardSync>()
+        val transport = SecureTransport(IdentityManager(context, true), scope, { message, _ ->
+            when (message) {
+                is ProtocolMessage.NotificationAction -> request.complete(message)
+                is ProtocolMessage.ClipboardSync -> echoed.complete(message)
+                else -> Unit
+            }
+        }, {})
+        try { runBlocking(Dispatchers.IO) {
+            transport.pairDevice(code.device, code.secret) {}
+            val state = transport.connectionState.value as ConnectionState.Connected
+            val token = "11111111-1111-1111-1111-111111111111"
+            assertTrue(transport.sendMessage(ProtocolMessage.NotificationMirror("dismiss-target", "com.chat", "Chat 🌉", "Hello", "Body", dismissToken = token), state.device.id, state.connectedSince))
+            val received = withTimeout(5000) { request.await() }
+            assertEquals("DISMISS", received.actionType)
+            assertEquals(token, received.actionToken)
+            assertEquals("dismiss-target", received.notificationId)
+            assertTrue(transport.sendMessage(ProtocolMessage.NotificationAction(received.notificationId, "DISMISS_RESULT", actionToken = token, status = "REQUESTED"), state.device.id, state.connectedSince))
+            assertTrue(transport.sendMessage(ProtocolMessage.NotificationAction(received.notificationId, "REMOVE"), state.device.id, state.connectedSince))
+            assertTrue(transport.sendMessage(ProtocolMessage.ClipboardSync("still connected", sourceDevice = "Test")))
+            assertEquals("still connected", withTimeout(5000) { echoed.await() }.content)
+            val events = File(peerDirectory, "notifications.jsonl").readLines().map { org.json.JSONObject(it) }
+            assertEquals(listOf("post", "result", "remove"), events.map { it.getString("operation") })
+            assertEquals("REQUESTED", events[1].getString("status"))
+        } } finally { transport.stop(); scope.cancel() }
+    }
+
     private lateinit var peerDirectory: File
-    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, notifications: Boolean = false, test: (PairingCode) -> Unit) {
+    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, notifications: Boolean = false, dismiss: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
         val directory = Files.createTempDirectory("macbridge-integration-").toFile()
@@ -108,12 +140,14 @@ class SecureTransportIntegrationTest {
                 if value['event'] == 'notification':
                     with open(Path(sys.argv[2]) / 'notifications.jsonl', 'a') as out:
                         out.write(json.dumps(value)+'\n')
+                    if sys.argv[3] == 'dismiss' and value.get('operation') == 'post':
+                        peer.handle_command(dict(action='dismissNotification', notificationId=value['notificationId'], actionToken=value['dismissToken'], connectionId=peer.connection_id))
             peer=Companion(sys.argv[2],host='127.0.0.1',port=0,echo=True,event_sink=event)
             peer.notifications=True
             print('PAIRING_URI='+peer.pairing_uri('127.0.0.1'),flush=True)
             peer.serve()
         """.trimIndent()
-        val command = if (notifications) listOf("python3", "-u", "-c", notificationScript, File(root, "mac").absolutePath, directory.absolutePath)
+        val command = if (notifications) listOf("python3", "-u", "-c", notificationScript, File(root, "mac").absolutePath, directory.absolutePath, if (dismiss) "dismiss" else "normal")
             else if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")
             else listOf("python3", File(root, "mac/macbridge.py").absolutePath,
                 "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",

@@ -4,6 +4,8 @@ import CryptoKit
 
 struct MirroredAlert: Equatable {
     let id: String
+    let key: String
+    let dismissToken: String?
     let app: String
     let title: String
     let text: String
@@ -12,7 +14,8 @@ struct MirroredAlert: Equatable {
 /// Bounded session catalog. Identifiers never embed phone notification keys or message content.
 struct NotificationCatalog {
     private(set) var items: [MirroredAlert] = []
-    mutating func reset() { items.removeAll() }
+    private var requested: Set<String> = []
+    mutating func reset() { items.removeAll(); requested.removeAll() }
     func identifier(session: String, key: String) -> String {
         SHA256.hash(data: Data((session + "\0" + key).utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -23,19 +26,31 @@ struct NotificationCatalog {
               let title = value.title, title.utf8.count <= 1024,
               let text = value.text, text.utf8.count <= 8192 else { return nil }
         let id = identifier(session: session, key: key)
-        let alert = MirroredAlert(id: id, app: app, title: title, text: text)
+        let token = value.dismissToken.flatMap { UUID(uuidString: $0) != nil ? $0 : nil }
+        let alert = MirroredAlert(id: id, key: key, dismissToken: token, app: app, title: title, text: text)
         if let index = items.firstIndex(where: { $0.id == id }) {
             if items[index] == alert { return nil }
+            requested.remove(id)
             items[index] = alert
             return (alert, nil)
         }
         let evicted = items.count == 100 ? items.removeFirst().id : nil
+        if let evicted { requested.remove(evicted) }
         items.append(alert)
         return (alert, evicted)
+    }
+    mutating func takeDismiss(id: String, token: String) -> MirroredAlert? {
+        guard let alert = items.first(where: { $0.id == id }), alert.dismissToken == token, !requested.contains(id) else { return nil }
+        requested.insert(id)
+        return alert
+    }
+    func matchesResult(session: String, key: String, token: String) -> Bool {
+        items.contains { $0.id == identifier(session: session, key: key) && $0.dismissToken == token }
     }
     mutating func remove(session: String, key: String) -> String? {
         let id = identifier(session: session, key: key)
         guard let index = items.firstIndex(where: { $0.id == id }) else { return nil }
+        requested.remove(id)
         items.remove(at: index)
         return id
     }
@@ -50,11 +65,14 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     private var revision = 0
     private var draining = false
     private var queue: [(CompanionEvent, Int)] = []
+    var onDismiss: ((String, String, String) -> Void)?
     var onStatus: ((String) -> Void)?
     var onAccessDenied: (() -> Void)?
     override init() {
         super.init()
         center.delegate = self
+        let dismiss = UNNotificationAction(identifier: "DISMISS_ON_PHONE", title: "Dismiss on Phone", options: [.destructive])
+        center.setNotificationCategories([UNNotificationCategory(identifier: "PHONE_DISMISS", actions: [dismiss], intentIdentifiers: [], options: [])])
         clear()
     }
     func refreshPermission() {
@@ -86,6 +104,11 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     }
     func receive(_ event: CompanionEvent) {
         guard enabled, !session.isEmpty, event.connectionId == session else { return }
+        if event.operation == "result", let key = event.notificationId, let token = event.dismissToken,
+           catalog.matchesResult(session: session, key: key, token: token) {
+            onStatus?(event.status == "REQUESTED" ? "Phone received dismiss request" : "Dismiss unavailable · check phone permissions or wait for a new alert")
+            return
+        }
         if event.operation == "clear" { clear(); return }
         guard queue.count < 64 else { clear(); return }
         queue.append((event, revision))
@@ -110,6 +133,10 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
                     content.title = alert.app.isEmpty ? "Phone notification" : alert.app
                     content.subtitle = alert.title
                     content.body = alert.text
+                    if let token = alert.dismissToken {
+                        content.categoryIdentifier = "PHONE_DISMISS"
+                        content.userInfo = ["session": self.session, "token": token]
+                    }
                     do { try await self.center.add(UNNotificationRequest(identifier: alert.id, content: content, trigger: nil)) }
                     catch { self.onStatus?("macOS could not display an alert"); self.refreshPermission() }
                     if self.revision != token {
@@ -119,6 +146,21 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
                 default: break
                 }
             }
+        }
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void) {
+        guard response.actionIdentifier == "DISMISS_ON_PHONE" else { completionHandler(); return }
+        let id = response.notification.request.identifier
+        let info = response.notification.request.content.userInfo
+        let source = info["session"] as? String
+        let token = info["token"] as? String
+        Task { @MainActor [weak self] in
+            defer { completionHandler() }
+            guard let self, self.enabled, source == self.session, let token,
+                  let alert = self.catalog.takeDismiss(id: id, token: token) else { return }
+            self.onStatus?("Requesting dismissal on phone…")
+            self.onDismiss?(alert.key, token, self.session)
         }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,

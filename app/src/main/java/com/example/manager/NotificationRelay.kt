@@ -30,7 +30,7 @@ internal class NotificationRelay(scope: CoroutineScope,
             when (msg) {
                 is ProtocolMessage.NotificationMirror -> {
                     val digest = java.security.MessageDigest.getInstance("SHA-256")
-                    for (field in listOf(msg.packageName, msg.appName, msg.title, msg.text)) {
+                    for (field in listOf(msg.packageName, msg.appName, msg.title, msg.text, msg.dismissToken.orEmpty())) {
                         val bytes = field.toByteArray(Charsets.UTF_8)
                         digest.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.size).array()); digest.update(bytes)
                     }

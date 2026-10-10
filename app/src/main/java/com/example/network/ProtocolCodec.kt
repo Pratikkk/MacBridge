@@ -83,11 +83,14 @@ object ProtocolCodec {
                 json.put("timestamp", message.timestamp)
                 json.put("hasReplyAction", message.hasReplyAction)
                 json.put("isDismissed", message.isDismissed)
+                message.dismissToken?.let { json.put("dismissToken", it) }
             }
             is ProtocolMessage.NotificationAction -> {
                 json.put("notificationId", message.notificationId)
                 json.put("actionType", message.actionType)
                 message.replyText?.let { json.put("replyText", it) }
+                message.actionToken?.let { json.put("actionToken", it) }
+                message.status?.let { json.put("status", it) }
             }
         }
         return json.toString()
@@ -172,12 +175,15 @@ object ProtocolCodec {
                     text = json.getString("text"),
                     timestamp = json.optLong("timestamp", System.currentTimeMillis()),
                     hasReplyAction = json.optBoolean("hasReplyAction", false),
-                    isDismissed = json.optBoolean("isDismissed", false)
+                    isDismissed = json.optBoolean("isDismissed", false),
+                    dismissToken = if (json.has("dismissToken")) json.getString("dismissToken") else null
                 )
                 "NOTIFICATION_ACTION" -> ProtocolMessage.NotificationAction(
                     notificationId = json.getString("notificationId"),
                     actionType = json.getString("actionType"),
-                    replyText = if (json.has("replyText")) json.getString("replyText") else null
+                    replyText = if (json.has("replyText")) json.getString("replyText") else null,
+                    actionToken = if (json.has("actionToken")) json.getString("actionToken") else null,
+                    status = if (json.has("status")) json.getString("status") else null
                 )
                 else -> null
             }
