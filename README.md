@@ -127,7 +127,7 @@ A disconnected receiver can discard its partial locally. The sender learns that 
 
 ### Transfers on Android Home
 
-Home shows live sending and receiving progress above the connection card, including filenames, percentages and byte counts. Cancel either direction directly, or resume a paused send after reconnecting. The latest verified incoming file has **Save As…** on Home, even while an outgoing transfer continues. When transfers finish, their latest outcomes appear below the connection card. Home retains only the latest outcome in each idle direction; the complete history stays in Share → Files. Home and Files use the same save, resume and cancel handlers and verification rules.
+Home shows live sending and receiving progress above the connection card, including filenames, percentages and byte counts. Cancel either direction directly, or resume a paused send after reconnecting. The latest verified incoming file has **Save As…** on Home, even while an outgoing transfer continues. When transfers finish, their latest outcomes appear below the connection card. Home retains only the latest outcome in each idle direction; the complete history stays in Share → Files. Home and Files use the same save, resume and cancel handlers and verification rules. Save As keeps file/provider copying on IO and returns to the main thread for completion feedback and UI state; failed saves remain retryable. Resume feedback follows the same UI-thread rule.
 
 ### App icon
 

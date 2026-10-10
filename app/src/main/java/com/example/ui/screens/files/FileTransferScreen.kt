@@ -17,6 +17,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.model.FileTransferItem
 import com.example.model.TransferDirection
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.ui.unit.dp
 import com.example.manager.BridgeManager
@@ -34,7 +37,19 @@ internal data class FileTransferActions(
 
 /** Share the same verified save and transfer controls between Home and Files. */
 @Composable
-internal fun rememberFileTransferActions(bridgeManager: BridgeManager): FileTransferActions {
+internal fun rememberFileTransferActions(bridgeManager: BridgeManager): FileTransferActions =
+    rememberFileTransferActions(bridgeManager.scope,
+        saveFile = bridgeManager.fileReceivingManager::saveAs,
+        resumeFile = bridgeManager.fileTransferManager::resumeTransfer,
+        cancelFile = { item ->
+            if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
+            else bridgeManager.scope.launch { bridgeManager.fileReceivingManager.cancel(item.transferId) }
+        })
+
+@Composable
+internal fun rememberFileTransferActions(scope: CoroutineScope,
+    saveFile: suspend (String, Uri) -> Boolean, resumeFile: suspend (String) -> Boolean,
+    cancelFile: (FileTransferItem) -> Unit): FileTransferActions {
     val context = LocalContext.current
     var pendingSave by rememberSaveable { mutableStateOf<String?>(null) }
     var savingId by remember { mutableStateOf<String?>(null) }
@@ -43,8 +58,10 @@ internal fun rememberFileTransferActions(bridgeManager: BridgeManager): FileTran
         pendingSave = null
         if (uri != null && id != null) {
             savingId = id
-            bridgeManager.scope.launch {
-                val ok = bridgeManager.fileReceivingManager.saveAs(id, uri)
+            // The app scope uses Default; UI state and Toast must resume on Main.
+            // saveAs itself switches file/provider IO to Dispatchers.IO.
+            scope.launch(Dispatchers.Main.immediate) {
+                val ok = saveFile(id, uri)
                 savingId = null
                 Toast.makeText(context, if (ok) "File saved" else "Could not save. Your verified copy is still here; try Save As again.", Toast.LENGTH_LONG).show()
             }
@@ -52,12 +69,9 @@ internal fun rememberFileTransferActions(bridgeManager: BridgeManager): FileTran
     }
     return FileTransferActions(savingId, pendingSave != null,
         save = { item -> pendingSave = item.transferId; saver.launch(item.fileName) },
-        resume = { item -> bridgeManager.scope.launch {
-            if (!bridgeManager.fileTransferManager.resumeTransfer(item.transferId)) Toast.makeText(context, "Reconnect the original paired Mac to resume.", Toast.LENGTH_LONG).show()
-        } }, cancel = { item ->
-            if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
-            else bridgeManager.scope.launch { bridgeManager.fileReceivingManager.cancel(item.transferId) }
-        })
+        resume = { item -> scope.launch(Dispatchers.Main.immediate) {
+            if (!resumeFile(item.transferId)) Toast.makeText(context, "Reconnect the original paired Mac to resume.", Toast.LENGTH_LONG).show()
+        } }, cancel = cancelFile)
 }
 
 @Composable
