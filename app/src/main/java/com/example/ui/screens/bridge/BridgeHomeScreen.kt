@@ -13,8 +13,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.manager.BridgeManager
-import com.example.model.ConnectionState
-import com.example.model.PairedDevice
+import com.example.model.*
+import com.example.ui.screens.files.FileTransferCard
+import com.example.ui.screens.files.rememberFileTransferActions
+import com.example.ui.SharingFeature
+import com.example.ui.sharingUiState
 import com.example.ui.connectionLabel
 import com.example.ui.components.*
 import com.example.ui.theme.*
@@ -24,20 +27,46 @@ fun BridgeHomeScreen(bridgeManager: BridgeManager, onNavigateToPairing: () -> Un
     onNavigateToClipboard: () -> Unit, onNavigateToFiles: () -> Unit, modifier: Modifier = Modifier) {
     val state by bridgeManager.secureTransport.connectionState.collectAsState()
     val devices by bridgeManager.pairedDevices.collectAsState()
+    val transfers by bridgeManager.fileTransfers.collectAsState()
+    val busy by bridgeManager.fileTransferManager.busy.collectAsState()
+    val actions = rememberFileTransferActions(bridgeManager)
+    val availability = sharingUiState(state, devices, SharingFeature.FILES)
     HomeWorkspace(state, devices, onConnect = {
         val eligible = devices.filter { !it.isBlocked }
         if (eligible.size == 1) bridgeManager.connectToDevice(eligible.single()) else onNavigateToPairing()
     }, onDisconnect = { bridgeManager.disconnect() }, onClipboard = onNavigateToClipboard,
-        onFiles = onNavigateToFiles, modifier = modifier)
+        onFiles = onNavigateToFiles, modifier = modifier, transfers = transfers,
+        canResume = availability.canSend && !busy, savingId = actions.savingId,
+        canSave = !actions.savePickerOpen && actions.savingId == null,
+        onResume = actions.resume, onCancel = actions.cancel, onSave = actions.save)
 }
 
 @Composable
 fun HomeWorkspace(state: ConnectionState, devices: List<PairedDevice>, onConnect: () -> Unit,
-    onDisconnect: () -> Unit, onClipboard: () -> Unit, onFiles: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+    onDisconnect: () -> Unit, onClipboard: () -> Unit, onFiles: () -> Unit, modifier: Modifier = Modifier,
+    transfers: List<FileTransferItem> = emptyList(), canResume: Boolean = false, savingId: String? = null,
+    canSave: Boolean = true, onResume: (FileTransferItem) -> Unit = {},
+    onCancel: (FileTransferItem) -> Unit = {}, onSave: (FileTransferItem) -> Unit = {}) {
+    val visibleTransfers = remember(transfers) { homeTransfers(transfers) }
+    val active = visibleTransfers.any { it.status in currentTransferStatuses }
+    val transferSection: @Composable () -> Unit = {
+        if (visibleTransfers.isNotEmpty()) {
+            Text(if (active) "Current transfers" else "Latest transfers", style = MaterialTheme.typography.titleLarge)
+            visibleTransfers.forEach { item ->
+                key(item.transferId) {
+                    FileTransferCard(item, savingId == item.transferId, onSave = { onSave(item) },
+                        onCancel = { onCancel(item) }, canResume = canResume, onResume = { onResume(item) },
+                        canSave = canSave, compact = true)
+                }
+            }
+        }
+    }
+    Column(modifier.testTag("home_list").fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        ScreenTitle("Home", "Connect your Mac. Pick up where you left off.")
+        ScreenTitle("Home", "Your Mac. Your transfers.")
+        if (active) transferSection()
         ConnectionHeroCard(state, devices, onConnect, onDisconnect)
+        if (!active) transferSection()
         if (devices.any { !it.isBlocked }) {
             Panel {
                 Text("Share", style = MaterialTheme.typography.titleLarge)
@@ -93,4 +122,16 @@ fun ConnectionHeroCard(connectionState: ConnectionState, devices: List<PairedDev
             }
         }
     }
+}
+
+private val currentTransferStatuses = setOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED)
+
+/** Keep work in progress visible, with only the latest outcome in each idle direction. */
+internal fun homeTransfers(history: List<FileTransferItem>): List<FileTransferItem> {
+    val current = history.filter { it.status in currentTransferStatuses }.sortedByDescending { it.timestamp }
+    val latest = TransferDirection.entries.mapNotNull { direction ->
+        if (current.any { it.direction == direction }) null
+        else history.filter { it.direction == direction }.maxByOrNull { it.timestamp }
+    }.sortedByDescending { it.timestamp }
+    return current + latest
 }

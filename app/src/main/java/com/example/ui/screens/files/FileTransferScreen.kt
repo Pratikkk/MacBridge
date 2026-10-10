@@ -26,8 +26,15 @@ import com.example.ui.sharingUiState
 import com.example.ui.components.*
 import com.example.ui.theme.*
 
+internal data class FileTransferActions(
+    val savingId: String?, val savePickerOpen: Boolean,
+    val save: (FileTransferItem) -> Unit, val resume: (FileTransferItem) -> Unit,
+    val cancel: (FileTransferItem) -> Unit
+)
+
+/** Share the same verified save and transfer controls between Home and Files. */
 @Composable
-fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
+internal fun rememberFileTransferActions(bridgeManager: BridgeManager): FileTransferActions {
     val context = LocalContext.current
     var pendingSave by rememberSaveable { mutableStateOf<String?>(null) }
     var savingId by remember { mutableStateOf<String?>(null) }
@@ -43,6 +50,20 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
             }
         }
     }
+    return FileTransferActions(savingId, pendingSave != null,
+        save = { item -> pendingSave = item.transferId; saver.launch(item.fileName) },
+        resume = { item -> bridgeManager.scope.launch {
+            if (!bridgeManager.fileTransferManager.resumeTransfer(item.transferId)) Toast.makeText(context, "Reconnect the original paired Mac to resume.", Toast.LENGTH_LONG).show()
+        } }, cancel = { item ->
+            if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
+            else bridgeManager.scope.launch { bridgeManager.fileReceivingManager.cancel(item.transferId) }
+        })
+}
+
+@Composable
+fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
+    val context = LocalContext.current
+    val actions = rememberFileTransferActions(bridgeManager)
     val state by bridgeManager.secureTransport.connectionState.collectAsState()
     val devices by bridgeManager.pairedDevices.collectAsState()
     val history by bridgeManager.fileTransfers.collectAsState()
@@ -51,15 +72,10 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && !bridgeManager.fileTransferManager.sendFile(uri)) Toast.makeText(context, "Resume or cancel your current transfer first.", Toast.LENGTH_LONG).show()
     }
-    FileWorkspace(history, availability.canSend, busy, savingId, pendingSave != null,
+    FileWorkspace(history, availability.canSend, busy, actions.savingId, actions.savePickerOpen,
         onChoose = { picker.launch(arrayOf("*/*")) }, onDevices = onDevices,
-        onSave = { item -> pendingSave = item.transferId; saver.launch(item.fileName) },
-        onResume = { item -> bridgeManager.scope.launch {
-            if (!bridgeManager.fileTransferManager.resumeTransfer(item.transferId)) Toast.makeText(context, "Reconnect the original paired Mac to resume.", Toast.LENGTH_LONG).show()
-        } }, onCancel = { item ->
-            if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
-            else bridgeManager.scope.launch { bridgeManager.fileReceivingManager.cancel(item.transferId) }
-        }, guidance = availability.guidance)
+        onSave = actions.save, onResume = actions.resume, onCancel = actions.cancel,
+        guidance = availability.guidance)
 }
 
 @Composable
@@ -116,11 +132,12 @@ fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevice
 }
 
 @Composable
-fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit, onCancel: () -> Unit, canResume: Boolean = false, onResume: () -> Unit = {}, canSave: Boolean = true) {
+fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit, onCancel: () -> Unit, canResume: Boolean = false, onResume: () -> Unit = {}, canSave: Boolean = true, compact: Boolean = false) {
     Panel {
-        Text(item.fileName, style = MaterialTheme.typography.titleMedium)
+        Text(item.fileName, style = MaterialTheme.typography.titleMedium, maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         val incoming = item.direction == TransferDirection.INCOMING
-        Text(if (incoming) "Mac → Phone" else "Phone → Mac", color = Slate400,
+        if (!compact) Text(if (incoming) "Mac → Phone" else "Phone → Mac", color = Slate400,
             style = MaterialTheme.typography.labelMedium)
         val verified = item.status == TransferStatus.COMPLETED &&
             (if (incoming) item.transferId.startsWith("incoming-") && item.filePath != null && item.calculatedChecksum == item.sha256Checksum else item.transferId.startsWith("file-v1-"))
@@ -145,7 +162,7 @@ fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit
         if (incoming && verified) {
             OutlinedButton(onClick = onSave, enabled = canSave && !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .testTag("save_file_${item.transferId}")) { Text(if (saving) "Saving…" else "Save As…") }
-            Text("Choose where to save your verified copy.", color = Slate400, style = MaterialTheme.typography.bodySmall)
+            if (!compact) Text("Choose where to save your verified copy.", color = Slate400, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

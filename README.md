@@ -124,3 +124,7 @@ Android shows current transfers before the send panel and recent files, with mat
 Both devices show sending and receiving progress. On Android, use **Cancel sending** or **Cancel receiving** in the current transfer card. On Mac, use **Cancel File Sending** or **Cancel File Receiving** in the menu bar, including for a paused incoming transfer. Cancellation discards the unverified partial or private outgoing snapshot and notifies the original authenticated peer when connected; completed verified files remain available.
 
 A disconnected receiver can discard its partial locally. The sender learns that the transfer cannot continue when it reconnects and attempts to resume; an offline peer cannot receive an immediate cancellation notification. A new transfer must be started after cancellation. Mac receiving actions carry a transfer and peer token so delayed actions cannot cancel a replacement transfer.
+
+### Transfers on Android Home
+
+Home shows live sending and receiving progress above the connection card, including filenames, percentages and byte counts. Cancel either direction directly, or resume a paused send after reconnecting. The latest verified incoming file has **Save As…** on Home, even while an outgoing transfer continues. When transfers finish, their latest outcomes appear below the connection card. Home retains only the latest outcome in each idle direction; the complete history stays in Share → Files. Home and Files use the same save, resume and cancel handlers and verification rules.
