@@ -6,7 +6,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -57,4 +63,17 @@ fun FeatureHeading(title: String, icon: ImageVector) {
         }
         Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
     }
+}
+
+/** Keep setup guidance nearby without putting it ahead of everyday actions. */
+@Composable
+fun SharingHelp(title: String, content: @Composable ColumnScope.() -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+        .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }) {
+        Text(title, modifier = Modifier.weight(1f))
+        Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+            contentDescription = null)
+    }
+    if (expanded) Column(verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }

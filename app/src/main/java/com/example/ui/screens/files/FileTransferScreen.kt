@@ -20,8 +20,9 @@ import kotlinx.coroutines.launch
 import android.widget.Toast
 import androidx.compose.ui.unit.dp
 import com.example.manager.BridgeManager
-import com.example.model.ConnectionState
 import com.example.model.TransferStatus
+import com.example.ui.SharingFeature
+import com.example.ui.sharingUiState
 import com.example.ui.components.*
 import com.example.ui.theme.*
 
@@ -29,15 +30,15 @@ import com.example.ui.theme.*
 fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
     val context = LocalContext.current
     var pendingSave by rememberSaveable { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
+    var savingId by remember { mutableStateOf<String?>(null) }
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val id = pendingSave
         pendingSave = null
         if (uri != null && id != null) {
-            saving = true
+            savingId = id
             bridgeManager.scope.launch {
                 val ok = bridgeManager.fileReceivingManager.saveAs(id, uri)
-                saving = false
+                savingId = null
                 Toast.makeText(context, if (ok) "File saved" else "Could not save. Your verified copy is still here; try Save As again.", Toast.LENGTH_LONG).show()
             }
         }
@@ -46,70 +47,76 @@ fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
     val devices by bridgeManager.pairedDevices.collectAsState()
     val history by bridgeManager.fileTransfers.collectAsState()
     val busy by bridgeManager.fileTransferManager.busy.collectAsState()
-    val connected = state as? ConnectionState.Connected
-    val device = devices.firstOrNull { it.id == connected?.device?.id }
-    val enabled = connected != null && !connected.isSimulated && device?.allowFileTransfer == true && !device.isBlocked
+    val availability = sharingUiState(state, devices, SharingFeature.FILES)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) bridgeManager.fileTransferManager.sendFile(uri)
+        if (uri != null && !bridgeManager.fileTransferManager.sendFile(uri)) Toast.makeText(context, "Resume or cancel your current transfer first.", Toast.LENGTH_LONG).show()
     }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { ScreenTitle("Files", "Verified sharing in both directions.") }
-        item {
-            FileSendCard(enabled, busy, onChoose = { picker.launch(arrayOf("*/*")) }, onDevices,
-                paused = history.any { it.direction == TransferDirection.OUTGOING && it.status == TransferStatus.PAUSED })
-        }
-        item { Text("Recent files", style = MaterialTheme.typography.titleLarge) }
-        if (history.isEmpty()) item {
-            Panel {
-                Icon(Icons.Outlined.FolderOpen, contentDescription = null, tint = Slate400)
-                Text("Your shared files will appear here", style = MaterialTheme.typography.titleMedium)
-                Text("Choose your first document to get started.", color = Slate400)
-            }
-        }
-        items(history, key = { it.transferId }) { item ->
-            FileTransferCard(item, saving,
-                canResume = enabled && !busy,
-                onResume = { bridgeManager.scope.launch {
-                    if (!bridgeManager.fileTransferManager.resumeTransfer(item.transferId)) Toast.makeText(context, "Reconnect the original paired Mac to resume.", Toast.LENGTH_LONG).show()
-                } },
-                onSave = { pendingSave = item.transferId; saver.launch(item.fileName) },
-                onCancel = {
-                    if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
-                    else bridgeManager.scope.launch { bridgeManager.fileReceivingManager.cancel(item.transferId) }
-                })
-        }
-    }
-
+    FileWorkspace(history, availability.canSend, busy, savingId, pendingSave != null,
+        onChoose = { picker.launch(arrayOf("*/*")) }, onDevices = onDevices,
+        onSave = { item -> pendingSave = item.transferId; saver.launch(item.fileName) },
+        onResume = { item -> bridgeManager.scope.launch {
+            if (!bridgeManager.fileTransferManager.resumeTransfer(item.transferId)) Toast.makeText(context, "Reconnect the original paired Mac to resume.", Toast.LENGTH_LONG).show()
+        } }, onCancel = { item ->
+            if (item.direction == TransferDirection.OUTGOING) bridgeManager.fileTransferManager.cancelTransfer(item.transferId)
+            else bridgeManager.scope.launch { bridgeManager.fileReceivingManager.cancel(item.transferId) }
+        }, guidance = availability.guidance)
 }
 
 @Composable
-fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevices: () -> Unit, paused: Boolean = false) {
+fun FileWorkspace(history: List<FileTransferItem>, enabled: Boolean, busy: Boolean, savingId: String?, savePickerOpen: Boolean,
+    onChoose: () -> Unit, onDevices: () -> Unit, onSave: (FileTransferItem) -> Unit,
+    onResume: (FileTransferItem) -> Unit, onCancel: (FileTransferItem) -> Unit, guidance: String? = null) {
+    val (current, recent) = remember(history) { history.partition { it.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED) } }
+    val card: @Composable (FileTransferItem) -> Unit = { item ->
+        FileTransferCard(item, savingId == item.transferId, onSave = { onSave(item) }, onCancel = { onCancel(item) },
+            canResume = enabled && !busy, onResume = { onResume(item) }, canSave = !savePickerOpen && savingId == null)
+    }
+    LazyColumn(Modifier.fillMaxSize().testTag("file_list"), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { ScreenTitle("Files", "Send here. Save there.") }
+        item { FileSendCard(enabled, busy, onChoose, onDevices,
+            paused = current.any { it.direction == TransferDirection.OUTGOING && it.status == TransferStatus.PAUSED }, guidance = guidance) }
+        if (current.isNotEmpty()) {
+            item { Text("Current transfers", style = MaterialTheme.typography.titleLarge) }
+            items(current, key = { it.transferId }) { card(it) }
+        }
+        if (recent.isNotEmpty()) {
+            item { Text("Recent files", style = MaterialTheme.typography.titleLarge) }
+            items(recent, key = { it.transferId }) { card(it) }
+        } else if (current.isEmpty()) item {
+            Panel {
+                Icon(Icons.Outlined.FolderOpen, contentDescription = null, tint = Slate400)
+                Text("No shared files yet", style = MaterialTheme.typography.titleMedium)
+                Text("Choose a file above, or send one from your Mac.", color = Slate400)
+            }
+        }
+    }
+}
+
+@Composable
+fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevices: () -> Unit, paused: Boolean = false, guidance: String? = null) {
     Panel {
-        FeatureHeading("Send a document", Icons.Outlined.Description)
-        Text("Phone → Mac · Up to 100 MB", color = Slate400, style = MaterialTheme.typography.bodyMedium)
+        FeatureHeading("Phone → Mac", Icons.Outlined.Description)
+        Text("Files up to 100 MB", color = Slate400, style = MaterialTheme.typography.bodyMedium)
         Button(onClick = onChoose, enabled = enabled && !busy && !paused,
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("choose_file_button")) {
             Text(if (busy) "Transfer in progress…" else if (paused) "Transfer paused" else "Choose file")
         }
         if (paused) Text("Resume or cancel the paused transfer below before choosing another file.", color = Slate400, style = MaterialTheme.typography.bodyMedium)
         if (!enabled) {
-            Text("Connect your Mac and turn on File sharing in Devices.", color = Slate400,
+            Text(guidance ?: "Connect your Mac and turn on File sharing in Devices.", color = Slate400,
                 style = MaterialTheme.typography.bodyMedium)
             TextButton(onClick = onDevices, modifier = Modifier.fillMaxWidth()) { Text("Open Devices") }
         }
-        HorizontalDivider(color = Slate800)
-        Text("On your Mac", style = MaterialTheme.typography.titleMedium)
-        Text("Turn on Allow file receiving. Open Show Received Files to find your verified documents.",
-            color = Slate400, style = MaterialTheme.typography.bodyMedium)
-        Text("Receive: Mac menu → Send File to Phone… Then use Save As… below.", color = Slate400,
-            style = MaterialTheme.typography.bodyMedium)
-        Text("Interrupted? Reconnect the same device and resume within 10 minutes. Keep both apps running.", color = Slate400,
-            style = MaterialTheme.typography.bodyMedium)
+        SharingHelp("How file sharing works") {
+            Text("Phone → Mac: turn on Allow File Receiving in the Mac menu, then choose a file here. Find verified files in Show Received Files.", color = Slate400)
+            Text("Mac → Phone: choose Send File to Phone… in the Mac menu, then Save As… on the received file below.", color = Slate400)
+            Text("Interrupted? Reconnect the same device and resume within 10 minutes. Keep both apps running.", color = Slate400)
+        }
     }
 }
 
 @Composable
-fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit, onCancel: () -> Unit, canResume: Boolean = false, onResume: () -> Unit = {}) {
+fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit, onCancel: () -> Unit, canResume: Boolean = false, onResume: () -> Unit = {}, canSave: Boolean = true) {
     Panel {
         Text(item.fileName, style = MaterialTheme.typography.titleMedium)
         val incoming = item.direction == TransferDirection.INCOMING
@@ -136,10 +143,9 @@ fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit
             OutlinedButton(onClick = onResume, enabled = canResume, modifier = Modifier.fillMaxWidth()) { Text("Resume transfer") }
         }
         if (incoming && verified) {
-            OutlinedButton(onClick = onSave, enabled = !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            OutlinedButton(onClick = onSave, enabled = canSave && !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .testTag("save_file_${item.transferId}")) { Text(if (saving) "Saving…" else "Save As…") }
-            Text("This copy stays private until you choose where to save it.", color = Slate400,
-                style = MaterialTheme.typography.bodyMedium)
+            Text("Choose where to save your verified copy.", color = Slate400, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

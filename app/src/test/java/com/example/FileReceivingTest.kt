@@ -26,9 +26,10 @@ import java.util.concurrent.atomic.AtomicReference
 
 internal class TestFileHistory : FileTransferDao {
     val values = ConcurrentHashMap<String, FileTransferItem>()
+    val writes = CopyOnWriteArrayList<FileTransferItem>()
     override fun getAllTransfers(): Flow<List<FileTransferItem>> = flowOf(values.values.toList())
     override suspend fun getTransfer(transferId: String) = values[transferId]
-    override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer }
+    override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }
     override suspend fun deleteById(transferId: String) { values.remove(transferId) }
     override suspend fun failInterruptedOutgoing() {}
     override suspend fun failInterruptedIncoming() {
@@ -53,7 +54,7 @@ class FileReceivingTest {
         override fun delete(uri: Uri, s: String?, a: Array<out String>?) = 0
         override fun update(uri: Uri, v: ContentValues?, s: String?, a: Array<out String>?) = 0
     }
-    private class Fixture(timeout: Long = 30000, resumable: Boolean = false, resumeWindow: Long = TRANSFER_RESUME_WINDOW_MS) {
+    private class Fixture(timeout: Long = 30000, resumable: Boolean = false, resumeWindow: Long = TRANSFER_RESUME_WINDOW_MS, progressClock: () -> Long = System::nanoTime) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val history = TestFileHistory()
         val job = SupervisorJob()
@@ -64,7 +65,7 @@ class FileReceivingTest {
         val acks = CopyOnWriteArrayList<ProtocolMessage.FileAck>()
         val manager = FileReceivingManager(context, history, scope, { target.get() }, { message, _ ->
             acks.add(message as ProtocolMessage.FileAck); true
-        }, timeout, retain = { permitted.get() }, resumeWindowMs = resumeWindow)
+        }, timeout, retain = { permitted.get() }, resumeWindowMs = resumeWindow, progressClock = progressClock)
         val folder get() = File(context.filesDir, "received_files")
         suspend fun process(message: ProtocolMessage) = manager.process(message, source)
         suspend fun start(data: ByteArray, name: String = "🌉 notes.bin", hash: String = hash(data), id: String = "mac-file") =
@@ -93,6 +94,19 @@ class FileReceivingTest {
         provider.attachInfo(context, android.content.pm.ProviderInfo().apply { authority = "save-tests"; exported = true })
         ShadowContentResolver.registerProviderInternal("save-tests", provider)
         return file
+    }
+
+    @Test fun `large receive acknowledges every chunk without writing presentation state per chunk`() = runBlocking {
+        val fixture = Fixture(progressClock = { 0L })
+        try { with(fixture) {
+            val bytes = ByteArray(FILE_CHUNK_SIZE * 128) { (it % 256).toByte() }
+            deliver(bytes)
+            assertEquals(129, acks.size)
+            assertEquals(127, acks.count { it.status == "IN_PROGRESS" })
+            assertEquals(2, history.writes.size)
+            assertEquals(bytes.size.toLong(), history.values.values.single().transferredBytes)
+            assertArrayEquals(bytes, File(history.values.values.single().filePath!!).readBytes())
+        } } finally { fixture.close() }
     }
 
     @Test fun `disconnect resumes same peer offset and lost final acknowledgement returns receipt`() = runBlocking {

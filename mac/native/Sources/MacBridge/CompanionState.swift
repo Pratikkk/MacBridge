@@ -1,6 +1,6 @@
 import Foundation
 
-struct PairedPhone: Decodable, Identifiable {
+struct PairedPhone: Decodable, Identifiable, Equatable {
     let id: String
     let name: String
 }

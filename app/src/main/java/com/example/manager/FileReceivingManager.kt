@@ -8,6 +8,7 @@ import com.example.data.FileTransferDao
 import com.example.model.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -24,14 +25,20 @@ class FileReceivingManager(
     private val send: suspend (ProtocolMessage, FileTransferTarget) -> Boolean,
     private val idleTimeoutMs: Long = 30000,
     private val retain: suspend (FileTransferTarget) -> Boolean = { false },
-    private val resumeWindowMs: Long = TRANSFER_RESUME_WINDOW_MS
+    private val resumeWindowMs: Long = TRANSFER_RESUME_WINDOW_MS,
+    private val progressClock: () -> Long = System::nanoTime
 ) {
     private val folder = File(context.filesDir, "received_files")
     private val mutex = Mutex()
     private data class Incoming(val id: String, var source: FileTransferTarget, var item: FileTransferItem,
         val temporary: File, val output: FileOutputStream, val digest: MessageDigest,
-        var index: Int = 0, var activity: Long = System.nanoTime())
-    private var active: Incoming? = null
+        val updates: ProgressUpdates, var index: Int = 0, var activity: Long = System.nanoTime())
+    private val activeSignals = Channel<Unit>(Channel.CONFLATED)
+    @Volatile private var active: Incoming? = null
+        set(value) {
+            field = value
+            if (value != null) activeSignals.trySend(Unit)
+        }
     private var pausedAt: Long? = null
     private val cancelled = LinkedHashMap<String, FileTransferTarget>()
     private val receipts = LinkedHashMap<String, Pair<FileTransferTarget, FileTransferItem>>()
@@ -51,19 +58,22 @@ class FileReceivingManager(
             try {
                 initialized.await()
                 while (isActive) {
-                    delay(250)
-                    mutex.withLock {
-                        val value = active ?: return@withLock
-                        if (!retain(value.source) && (!sameSession(target(), value.source) || pausedAt != null || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs)) {
-                            abort("File sharing permission or identity changed.")
-                            send(ProtocolMessage.FileAck(value.id, value.item.transferredBytes, "REJECTED"), value.source)
-                        } else if (pausedAt?.let { (System.nanoTime() - it) / 1_000_000 > resumeWindowMs } == true) {
-                            abort("Paused transfer expired. Ask your Mac to send it again.")
-                        } else if (pausedAt == null && (!sameSession(target(), value.source) || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs)) {
-                            value.output.flush()
-                            pausedAt = System.nanoTime()
-                            value.item = value.item.copy(status = TransferStatus.PAUSED, errorMessage = null)
-                            history.insertOrUpdate(value.item)
+                    activeSignals.receive()
+                    while (active != null) {
+                        delay(250)
+                        mutex.withLock {
+                            val value = active ?: return@withLock
+                            if (!retain(value.source) && (!sameSession(target(), value.source) || pausedAt != null || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs)) {
+                                abort("File sharing permission or identity changed.")
+                                send(ProtocolMessage.FileAck(value.id, value.item.transferredBytes, "REJECTED"), value.source)
+                            } else if (pausedAt?.let { (System.nanoTime() - it) / 1_000_000 > resumeWindowMs } == true) {
+                                abort("Paused transfer expired. Ask your Mac to send it again.")
+                            } else if (pausedAt == null && (!sameSession(target(), value.source) || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs)) {
+                                value.output.flush()
+                                pausedAt = System.nanoTime()
+                                value.item = value.item.copy(status = TransferStatus.PAUSED, errorMessage = null)
+                                history.insertOrUpdate(value.item)
+                            }
                         }
                     }
                 }
@@ -151,7 +161,7 @@ class FileReceivingManager(
                         direction = TransferDirection.INCOMING, status = TransferStatus.TRANSFERRING,
                         sha256Checksum = message.sha256Checksum)
                     val output = try { FileOutputStream(temporary) } catch (error: Exception) { temporary.delete(); throw error }
-                    active = Incoming(id, source, item, temporary, output, MessageDigest.getInstance("SHA-256"))
+                    active = Incoming(id, source, item, temporary, output, MessageDigest.getInstance("SHA-256"), ProgressUpdates(progressClock))
                     history.insertOrUpdate(item)
                     if (item.fileSize == 0L) finish() else acknowledge("READY")
                     return@withLock
@@ -172,7 +182,7 @@ class FileReceivingManager(
                 value.index++
                 value.activity = System.nanoTime()
                 value.item = value.item.copy(transferredBytes = value.item.transferredBytes + length)
-                history.insertOrUpdate(value.item)
+                if (value.item.transferredBytes < value.item.fileSize && value.updates.due()) history.insertOrUpdate(value.item)
                 if (value.item.transferredBytes == value.item.fileSize) finish()
                 else acknowledge("IN_PROGRESS", value.item.transferredBytes)
             } catch (error: Exception) {

@@ -19,12 +19,15 @@ import androidx.compose.ui.unit.dp
 import com.example.model.*
 import com.example.ui.*
 import com.example.ui.screens.bridge.ConnectionHeroCard
+import com.example.ui.screens.bridge.HomeWorkspace
 import com.example.ui.screens.clipboard.ClipboardWorkspace
 import com.example.ui.screens.devices.PairedDeviceItemCard
 import com.example.ui.screens.settings.SettingsContent
 import com.example.ui.screens.files.FileSendCard
 import com.example.ui.screens.files.FileTransferCard
 import com.example.ui.screens.ShareTabs
+import com.example.ui.screens.ShareWorkspace
+import com.example.ui.screens.files.FileWorkspace
 import com.example.ui.theme.MyApplicationTheme
 import org.junit.Assert.*
 import org.junit.Rule
@@ -257,7 +260,66 @@ class ModernUiTest {
         compose.onNodeWithTag("choose_file_button").performScrollTo().assertIsNotEnabled()
         compose.onNodeWithText("Open Devices").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, routes) }
-        compose.onNodeWithText("On your Mac").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("How file sharing works").performScrollTo().performClick()
+        compose.onNodeWithText("Mac → Phone: choose Send File to Phone… in the Mac menu, then Save As… on the received file below.").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun `Home offers direct Clipboard and Files routes without a duplicate send action`() {
+        var clipboard = 0; var files = 0
+        compose.setContent { MyApplicationTheme {
+            HomeWorkspace(connected, listOf(mac), {}, {}, { clipboard++ }, { files++ })
+        } }
+        compose.onNodeWithTag("open_clipboard").performScrollTo().performClick()
+        compose.onNodeWithTag("open_files").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, clipboard); assertEquals(1, files) }
+        compose.onNodeWithTag("sync_clipboard_button").assertDoesNotExist()
+    }
+
+    @Test fun `Share pages restore their own history state and respect a direct Files selection`() {
+        var files by mutableStateOf(false)
+        compose.setContent { MyApplicationTheme {
+            ShareWorkspace(files, { files = it }, clipboard = {
+                var count by rememberSaveable { mutableStateOf(0) }
+                androidx.compose.material3.TextButton(onClick = { count++ }) { Text("Text count $count") }
+            }, filesPage = { Text("File history") })
+        } }
+        compose.onNodeWithText("Text count 0").performClick()
+        compose.runOnIdle { files = true }
+        compose.onNodeWithText("File history").assertExists()
+        compose.onNodeWithText("Clipboard").performClick()
+        compose.onNodeWithText("Text count 1").assertExists()
+    }
+
+    @Test fun `file help starts collapsed and current transfers precede newer completed records`() {
+        val paused = FileTransferItem("file-v1-paused", "Paused document", 80000,
+            direction = TransferDirection.OUTGOING, status = TransferStatus.PAUSED, sha256Checksum = "hash")
+        val received = FileTransferItem("incoming-complete", "Received document", 1,
+            direction = TransferDirection.INCOMING, status = TransferStatus.COMPLETED, sha256Checksum = "hash", calculatedChecksum = "hash", filePath = "/private-copy")
+        compose.setContent { MyApplicationTheme {
+            FileWorkspace(listOf(received, paused), true, false, null, false, {}, {}, {}, {}, {})
+        } }
+        compose.onNodeWithText("How file sharing works").assertExists()
+        compose.onNodeWithText("Interrupted? Reconnect the same device and resume within 10 minutes. Keep both apps running.").assertDoesNotExist()
+        compose.onNodeWithTag("file_list").performScrollToNode(hasText("Resume transfer"))
+        compose.onNodeWithText("Current transfers").assertExists()
+        compose.onNodeWithText("Resume transfer").assertIsEnabled()
+        compose.onNodeWithTag("file_list").performScrollToNode(hasText("Received document"))
+        compose.onNodeWithText("Received document").assertExists()
+    }
+
+    @Test fun `save picker blocks duplicate exports without relabelling other files as saving`() {
+        val received = FileTransferItem("incoming-complete", "Received document", 1,
+            direction = TransferDirection.INCOMING, status = TransferStatus.COMPLETED, sha256Checksum = "hash", calculatedChecksum = "hash", filePath = "/private-copy")
+        compose.setContent { MyApplicationTheme { FileTransferCard(received, false, { fail("Duplicate picker") }, {}, canSave = false) } }
+        compose.onNodeWithText("Save As…").assertIsNotEnabled()
+        compose.onNodeWithText("Saving…").assertDoesNotExist()
+    }
+
+    @Test fun `clipboard and files reject stale identity and each uses its own permission`() {
+        for (feature in SharingFeature.entries) assertFalse(sharingUiState(connected, listOf(mac.copy(fingerprint = "changed")), feature).canSend)
+        val filesOnly = mac.copy(allowClipboard = false, allowFileTransfer = true)
+        assertFalse(sharingUiState(connected, listOf(filesOnly)).canSend)
+        assertTrue(sharingUiState(connected, listOf(filesOnly), SharingFeature.FILES).canSend)
     }
 
     @Test fun `small screen and large text retain accessible settings navigation`() {
@@ -269,6 +331,6 @@ class ModernUiTest {
         } }
         compose.onNodeWithTag("open_security_details").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, details) }
-        compose.onNodeWithText("File sharing · Available in Share").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("MacBridge · Development build").performScrollTo().assertIsDisplayed()
     }
 }

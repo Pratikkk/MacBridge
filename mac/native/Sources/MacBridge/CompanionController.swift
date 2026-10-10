@@ -109,23 +109,28 @@ final class CompanionController: ObservableObject {
             return
         }
         guard value.event == "state" else { return }
-        running = value.running ?? false
-        connected = value.connected ?? false
-        phoneName = value.phoneName ?? "Android Phone"
-        peers = value.peers ?? []
-        endpoint = value.endpoint ?? "No network address"
-        pairingURI = value.pairingURI ?? ""
-        expiresAt = Date(timeIntervalSince1970: value.expiresAt ?? 0)
-        clipboardEnabled = value.clipboardEnabled ?? false
-        filesEnabled = value.filesEnabled ?? false
-        connectionId = value.connectionId ?? ""
-        fileSending = value.fileSending ?? false
-        fileSendStatus = value.fileSendStatus ?? "idle"
-        fileCanResume = value.fileCanResume ?? false
-        sentBytes = value.sentBytes ?? 0
-        fileSize = value.fileSize ?? 0
-        lastAction = value.lastAction ?? "Ready"
-        errorMessage = nil
+        update(\.running, value.running ?? false)
+        update(\.connected, value.connected ?? false)
+        update(\.phoneName, value.phoneName ?? "Android Phone")
+        update(\.peers, value.peers ?? [])
+        update(\.endpoint, value.endpoint ?? "No network address")
+        update(\.pairingURI, value.pairingURI ?? "")
+        update(\.expiresAt, Date(timeIntervalSince1970: value.expiresAt ?? 0))
+        update(\.clipboardEnabled, value.clipboardEnabled ?? false)
+        update(\.filesEnabled, value.filesEnabled ?? false)
+        update(\.connectionId, value.connectionId ?? "")
+        update(\.fileSending, value.fileSending ?? false)
+        update(\.fileSendStatus, value.fileSendStatus ?? "idle")
+        update(\.fileCanResume, value.fileCanResume ?? false)
+        update(\.sentBytes, value.sentBytes ?? 0)
+        update(\.fileSize, value.fileSize ?? 0)
+        update(\.lastAction, value.lastAction ?? "Ready")
+        update(\.errorMessage, nil)
+    }
+
+    // Avoid invalidating the whole menu/settings view for unchanged state fields.
+    private func update<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<CompanionController, Value>, _ value: Value) {
+        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
     }
 
     private func command(_ payload: [String: Any]) {

@@ -39,7 +39,7 @@ fun SettingsScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
 fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        ScreenTitle("Settings", "Your connection, your choices.")
+        ScreenTitle("Settings", "Sharing and background access.")
         Panel {
             Text("Sharing permissions", style = MaterialTheme.typography.titleLarge)
             Text("Choose which Macs can exchange clipboard text and files. New pairings start with sharing off.", color = Slate400)
@@ -54,14 +54,6 @@ fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: ()
             Text("Security & diagnostics", style = MaterialTheme.typography.titleLarge)
             Text("Inspect device identity, implemented protections and local connection logs.", color = Slate400)
             TextButton(onClick = onSecurity, modifier = Modifier.fillMaxWidth().testTag("open_security_details")) { Text("View details") }
-        }
-        Text("On the roadmap", style = MaterialTheme.typography.titleLarge)
-        Panel {
-            Text("File sharing · Available in Share", style = MaterialTheme.typography.titleMedium)
-            Text("Exchange files with your Mac, verify delivery and save received documents.", color = Slate400)
-            HorizontalDivider(color = Slate800)
-            Text("Notification mirroring · Coming later", style = MaterialTheme.typography.titleMedium)
-            Text("View and manage phone notifications on your Mac.", color = Slate400)
         }
         Text("MacBridge · Development build", style = MaterialTheme.typography.bodyMedium, color = Slate400)
     }

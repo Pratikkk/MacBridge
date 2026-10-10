@@ -108,15 +108,14 @@ fun PairWithMacQrCard(
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Slate900),
-        shape = RoundedCornerShape(24.dp),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Slate800, RoundedCornerShape(24.dp))
+        shape = RoundedCornerShape(22.dp),
+        modifier = Modifier.fillMaxWidth().border(1.dp, Slate800, RoundedCornerShape(22.dp))
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
                 text = "Pair a Mac",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
+                style = MaterialTheme.typography.titleLarge,
+                color = Slate50
             )
             Text(
                 text = "Open Pair a phone on your Mac, then scan its QR or paste its code. Codes expire after 5 minutes.",
@@ -130,7 +129,7 @@ fun PairWithMacQrCard(
                 value = qrInput,
                 onValueChange = { scanMessage = null; onQrInputChange(it) },
                 enabled = !scanning && !pairing,
-                placeholder = { Text("macbridge://pair?id=...&secret=...", color = Slate400, fontSize = 14.sp) },
+                placeholder = { Text("Paste a MacBridge pairing code", color = Slate400, fontSize = 14.sp) },
                 modifier = Modifier.fillMaxWidth().testTag("qr_input_field"),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = CyanNeon,
@@ -139,7 +138,7 @@ fun PairWithMacQrCard(
                     unfocusedTextColor = Color.White,
                     cursorColor = CyanNeon
                 ),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(14.dp),
                 maxLines = 3
             )
 
@@ -168,8 +167,7 @@ fun PairWithMacQrCard(
                             } finally { scanning = false }
                         }
                     },
-                    modifier = Modifier.weight(1f).testTag("scan_mac_qr_button"),
-                    shape = RoundedCornerShape(8.dp)
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("scan_mac_qr_button")
                 ) {
                     Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
@@ -185,8 +183,7 @@ fun PairWithMacQrCard(
                             Toast.makeText(context, "Pasted from clipboard", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, Slate700)
                 ) {
                     Text("Paste", color = Slate200, fontSize = 14.sp)
@@ -210,7 +207,6 @@ fun PairWithMacQrCard(
             Button(
                 onClick = onPair,
                 colors = ButtonDefaults.buttonColors(containerColor = CyanNeon),
-                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("confirm_pair_button"),
                 enabled = preview != null && !scanning && !pairing
             ) {
@@ -273,7 +269,7 @@ fun PairedDeviceItemCard(device: PairedDevice, onConnect: () -> Unit, onUnpair: 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text("File sharing", style = MaterialTheme.typography.titleMedium)
-                Text("Send documents to this Mac.", color = Slate400, style = MaterialTheme.typography.bodyMedium)
+                Text("Send and receive documents.", color = Slate400, style = MaterialTheme.typography.bodyMedium)
             }
             Switch(checked = device.allowFileTransfer, enabled = !device.isBlocked,
                 onCheckedChange = { onPermissionsChange(device.allowClipboard, it, device.allowNotifications) },

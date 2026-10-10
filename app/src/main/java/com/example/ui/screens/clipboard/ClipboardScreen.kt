@@ -59,11 +59,11 @@ fun ClipboardWorkspace(history: List<ClipboardItem>, availability: SharingUiStat
     var confirmClear by remember { mutableStateOf(false) }
     LazyColumn(modifier.fillMaxSize().testTag("clipboard_list"), contentPadding = PaddingValues(24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { ScreenTitle("Clipboard", "A little less copying. A lot more flow.") }
+        item { ScreenTitle("Clipboard", "Copy on one device. Paste on the other.") }
         item {
             Panel {
-                FeatureHeading("Send copied text", Icons.Outlined.ContentPaste)
-                Text(availability.guidance, color = Slate400)
+                FeatureHeading("Phone → Mac", Icons.Outlined.ContentPaste)
+                if (!availability.canSend) Text(availability.guidance, color = Slate400)
                 Button(onClick = onSend, enabled = availability.canSend && !sending,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("push_clipboard_button")) {
                     Text(if (sending) "Sending…" else "Send clipboard to Mac")
@@ -75,15 +75,11 @@ fun ClipboardWorkspace(history: List<ClipboardItem>, availability: SharingUiStat
                 }
                 if (feedback != null) Text(feedback, style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("clipboard_feedback"))
-                Text("Copy text, then return here to send it. You can also share text directly from another app.",
-                    color = Slate400, style = MaterialTheme.typography.bodyMedium)
+                SharingHelp("How clipboard sharing works") {
+                    Text("Copy text on your phone, then tap Send clipboard to Mac. You can also share text from another app.", color = Slate400)
+                    Text("Mac → Phone: choose Send Clipboard to Phone in the Mac menu. Received text goes to your phone clipboard when Clipboard sharing is on.", color = Slate400)
+                }
             }
-        }
-        item {
-            Text("Mac → Phone", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
-            Text("Use Send Clipboard to Phone in the Mac companion. Received text is placed in your phone clipboard when sharing is enabled.",
-                color = Slate400, style = MaterialTheme.typography.bodyMedium)
         }
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -102,7 +98,7 @@ fun ClipboardWorkspace(history: List<ClipboardItem>, availability: SharingUiStat
         }
         items(history, key = { it.id }) { item ->
             ClipboardHistoryCard(item,
-                DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.timestamp))) { onCopy(item) }
+                remember(item.timestamp) { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.timestamp)) }) { onCopy(item) }
         }
     }
     if (confirmClear) AlertDialog(onDismissRequest = { confirmClear = false },

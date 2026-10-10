@@ -72,6 +72,30 @@ class FileSenderTests(unittest.TestCase):
         frames = self.scenario(bytes(range(256)) * 400)
         self.assertEqual(sum(frame['type'] == 'FILE_CHUNK' for frame in frames), 2)
 
+    def test_large_transfer_throttles_ui_reports_but_acknowledges_every_chunk(self):
+        from file_receiver import FileReceiver, CHUNK_SIZE
+        source = self.root / 'large-ui-test'
+        data = bytes(range(256)) * 32768  # 128 chunks, 8 MB
+        source.write_bytes(data)
+        receiver = FileReceiver(self.root / 'received')
+        statuses, chunks = [], []
+        clock = [0.0]
+        def send(frame):
+            ack = receiver.process(frame, True)
+            if frame['type'] == 'FILE_CHUNK':
+                chunks.append(frame['offset'])
+                clock[0] += .05
+            sender.handle_ack(ack)
+        sender = FileSender(self.root / 'spool', send, statuses.append, progress_clock=lambda: clock[0])
+        sender.start(source)
+        self.assertTrue(sender.finished.wait(5))
+        self.assertEqual('completed', sender.result)
+        self.assertEqual(128, len(chunks))
+        self.assertLessEqual(len(statuses), 28)
+        self.assertIn('received and verified', statuses[-1])
+        self.assertEqual(data, receiver.last_saved.read_bytes())
+        print('128-chunk Mac send: UI reports=', len(statuses), ', acknowledgements=129')
+
     def test_empty_file_requires_checksum_confirmation(self):
         self.scenario(b'')
 

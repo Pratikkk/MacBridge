@@ -62,9 +62,13 @@ struct CompanionMenu: View {
         } else if controller.fileSendStatus == "cancelled" {
             Text("File Sending Cancelled")
         }
-        Button("Resume File Sending", action: controller.resumeFileSend)
-            .disabled(!controller.fileCanResume || controller.fileSending)
-        Button("Cancel File Sending", action: controller.cancelFileSend).disabled(!controller.fileSending && controller.fileSendStatus != "paused")
+        if controller.fileSendStatus == "paused" && !controller.fileSending {
+            Button("Resume File Sending", action: controller.resumeFileSend)
+                .disabled(!controller.fileCanResume)
+        }
+        if controller.fileSending || controller.fileSendStatus == "paused" {
+            Button("Cancel File Sending", action: controller.cancelFileSend)
+        }
         Divider()
         Toggle("Allow Clipboard Sharing", isOn: Binding(
             get: { controller.clipboardEnabled }, set: controller.setClipboard))
@@ -111,6 +115,7 @@ struct CompanionSettingsView: View {
     @ObservedObject var controller: CompanionController
     @ObservedObject var windows: CompanionWindows
     @State private var phoneToForget: PairedPhone?
+    @State private var pairingQR = PairingQRCache()
 
     var body: some View {
         TabView(selection: $windows.selection) {
@@ -134,12 +139,13 @@ struct CompanionSettingsView: View {
     private var pairing: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             let remaining = max(0, Int(controller.expiresAt.timeIntervalSince(timeline.date)))
+            let qr = pairingQR.image(for: remaining > 0 ? controller.pairingURI : "")
             VStack(spacing: 12) {
                 Text("Pair with your Android phone").font(.headline)
                 Text("On Android, open Devices → Pair a Mac. Scan the QR code, then review and confirm the Mac identity.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 if !controller.pairingURI.isEmpty && remaining > 0,
-                   let qr = PairingQR.image(for: controller.pairingURI) {
+                   let qr = qr {
                     Image(nsImage: qr).resizable().interpolation(.none).scaledToFit()
                         .frame(width: 200, height: 200).padding(10)
                         .background(.white, in: RoundedRectangle(cornerRadius: 8))

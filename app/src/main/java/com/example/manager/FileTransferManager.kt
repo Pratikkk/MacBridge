@@ -36,7 +36,8 @@ class FileTransferManager(
     private val send: suspend (ProtocolMessage, FileTransferTarget) -> Boolean,
     private val ackTimeoutMs: Long = 15000,
     private val retain: suspend (FileTransferTarget) -> Boolean = { true },
-    private val resumeWindowMs: Long = TRANSFER_RESUME_WINDOW_MS
+    private val resumeWindowMs: Long = TRANSFER_RESUME_WINDOW_MS,
+    private val progressClock: () -> Long = System::nanoTime
 ) {
     private val spool = File(context.cacheDir, "outgoing_transfers")
     private val initialized = scope.async(Dispatchers.IO) {
@@ -61,20 +62,28 @@ class FileTransferManager(
     @Volatile private var expectedPeer: String? = null
 
     private data class Paused(val item: FileTransferItem, val destination: FileTransferTarget, val snapshot: File, val since: Long = System.nanoTime())
+    private val pauseSignals = Channel<Unit>(Channel.CONFLATED)
     @Volatile private var paused: Paused? = null
+        set(value) {
+            field = value
+            if (value != null) pauseSignals.trySend(Unit)
+        }
 
     init {
         scope.launch(Dispatchers.IO) {
             try {
                 while (isActive) {
-                    delay(250)
-                    if (occupied.get()) continue
-                    val value = paused ?: continue
-                    if ((System.nanoTime() - value.since) / 1_000_000 > resumeWindowMs || !retain(value.destination)) {
-                        if (paused === value && !occupied.get()) {
-                            paused = null
-                            value.snapshot.delete()
-                            fileTransferDao.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = "Paused transfer expired or File sharing permission changed."))
+                    pauseSignals.receive()
+                    while (paused != null) {
+                        delay(250)
+                        if (occupied.get()) continue
+                        val value = paused ?: continue
+                        if ((System.nanoTime() - value.since) / 1_000_000 > resumeWindowMs || !retain(value.destination)) {
+                            if (paused === value && !occupied.get()) {
+                                paused = null
+                                value.snapshot.delete()
+                                fileTransferDao.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = "Paused transfer expired or File sharing permission changed."))
+                            }
                         }
                     }
                 }
@@ -186,6 +195,7 @@ class FileTransferManager(
                     }
                     if (status == "COMPLETED") insist(response.sha256Checksum == checksum) { "Mac checksum verification failed." }
                 }
+                val updates = ProgressUpdates(progressClock)
                 val ready = withTimeout(ackTimeoutMs) { ack.receive() }
                 var offset = ready.receivedBytes
                 if (ready.status == "COMPLETED") {
@@ -211,7 +221,7 @@ class FileTransferManager(
                         offset += bytes.size
                         nextAck(offset, if (offset == count) "COMPLETED" else "IN_PROGRESS")
                         item = item.copy(transferredBytes = offset)
-                        fileTransferDao.insertOrUpdate(item)
+                        if (offset < count && updates.due()) fileTransferDao.insertOrUpdate(item)
                     }
                 }
                 item = item.copy(status = TransferStatus.COMPLETED, transferredBytes = count, calculatedChecksum = checksum)

@@ -18,11 +18,13 @@ class TransferDisconnected(Exception):
 
 
 class FileSender:
-    def __init__(self, directory, send, report, timeout=15):
+    def __init__(self, directory, send, report, timeout=15, progress_clock=time.monotonic):
         self.directory = Path(directory)
         self.send = send
         self.report = report
         self.timeout = timeout
+        self.progress_clock = progress_clock
+        self.next_progress_report = 0
         self.transfer_id = 'mac-file-v1-' + str(uuid.uuid4())
         self.busy = False
         self.result = "idle"
@@ -89,6 +91,12 @@ class FileSender:
         if self.cancelled.is_set():
             raise ValueError('Cancelled')
 
+    def report_progress(self, force=False):
+        now = self.progress_clock()
+        if force or now >= self.next_progress_report:
+            self.next_progress_report = now + .25
+            self.report('Sending file to phone')
+
     def transmit(self, message):
         try:
             self.send(message)
@@ -149,7 +157,7 @@ class FileSender:
                 if digest.hexdigest() != checksum:
                     raise ValueError("Snapshot changed")
             self.result = 'sending'
-            self.report('Sending file to phone')
+            self.report_progress(force=True)
             self.transmit(dict(type='FILE_INIT', transferId=self.transfer_id, fileName=name,
                 fileSize=self.file_size, sha256Checksum=checksum, chunkSize=CHUNK_SIZE,
                 mimeType='application/octet-stream', resume=path is None))
@@ -181,7 +189,8 @@ class FileSender:
                     self.confirm(count, 'COMPLETED' if final else 'IN_PROGRESS', checksum if final else None)
                     self.sent_bytes = count
                     index += 1
-                    self.report('Sending file to phone')
+                    if not final:
+                        self.report_progress()
             complete = True
         except (TransferDisconnected, queue.Empty):
             paused = self.snapshot is not None and (not self.cancelled.is_set() or self.interrupted)

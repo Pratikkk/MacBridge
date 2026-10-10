@@ -7,19 +7,29 @@ import androidx.compose.ui.unit.dp
 import com.example.ui.theme.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import com.example.manager.BridgeManager
 import com.example.ui.screens.clipboard.ClipboardScreen
 import com.example.ui.screens.files.FileTransferScreen
 
 @Composable
-fun ShareScreen(manager: BridgeManager, onDevices: () -> Unit) {
-    var files by rememberSaveable { mutableStateOf(false) }
+fun ShareScreen(manager: BridgeManager, onDevices: () -> Unit, files: Boolean, onSelect: (Boolean) -> Unit) {
+    ShareWorkspace(files, onSelect,
+        clipboard = { ClipboardScreen(manager, onDevices) },
+        filesPage = { FileTransferScreen(manager, onDevices) })
+}
+
+@Composable
+fun ShareWorkspace(files: Boolean, onSelect: (Boolean) -> Unit,
+    clipboard: @Composable () -> Unit, filesPage: @Composable () -> Unit) {
+    val pages = rememberSaveableStateHolder()
     Column(Modifier.fillMaxSize()) {
-        ShareTabs(files, onSelect = { files = it })
+        ShareTabs(files, onSelect)
         Box(Modifier.weight(1f)) {
-            if (files) FileTransferScreen(manager, onDevices) else ClipboardScreen(manager, onDevices)
+            pages.SaveableStateProvider(if (files) "files" else "clipboard") {
+                key(files) { if (files) filesPage() else clipboard() }
+            }
         }
     }
 }

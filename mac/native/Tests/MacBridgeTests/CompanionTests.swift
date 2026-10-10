@@ -95,6 +95,19 @@ struct CompanionChecks {
         let code = "macbridge://pair?v=2&id=mac-test&name=My%20Mac&fingerprint=" +
             Array(repeating: "AB", count: 32).joined(separator: "%3A") +
             "&ip=192.168.0.100&port=8990&secret=" + String(repeating: "b", count: 64)
+        var renders = 0
+        let cache = PairingQRCache { value in renders += 1; return PairingQR.image(for: value) }
+        let cached = cache.image(for: code)
+        for _ in 0..<300 {
+            try require(cache.image(for: code) === cached, "Countdown should reuse the pairing raster")
+        }
+        try require(renders == 1, "Countdown regenerated the QR raster")
+        try require(cache.image(for: "") == nil, "Expired code must clear the cached QR")
+        _ = cache.image(for: code)
+        try require(renders == 2, "Cleared code should generate a new raster")
+        _ = cache.image(for: code + "&new=1")
+        try require(renders == 3, "Rotated code must replace the cache")
+        print("PASS: 300 QR countdown requests use one raster; expiry and rotation refresh correctly")
         guard let image = PairingQR.image(for: code),
               let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
               let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: CIContext(),

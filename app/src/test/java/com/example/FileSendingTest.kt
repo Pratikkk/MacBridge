@@ -28,9 +28,10 @@ import java.util.concurrent.ConcurrentHashMap
 class FileSendingTest {
     private class History : FileTransferDao {
         val values = ConcurrentHashMap<String, FileTransferItem>()
+        val writes = java.util.concurrent.CopyOnWriteArrayList<FileTransferItem>()
         override fun getAllTransfers(): Flow<List<FileTransferItem>> = flowOf(values.values.toList())
         override suspend fun getTransfer(transferId: String) = values[transferId]
-        override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer }
+        override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }
         override suspend fun deleteById(transferId: String) { values.remove(transferId) }
         override suspend fun failInterruptedOutgoing() {}
         override suspend fun failInterruptedIncoming() {}
@@ -48,7 +49,7 @@ class FileSendingTest {
         override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?) = 0
     }
     private fun scenario(data: ByteArray, denied: Boolean = false, reportedSize: Long? = data.size.toLong(),
-        targetAllowed: Boolean = true, response: String = "valid", cancel: Boolean = false, oversizedStream: Boolean = false) = runBlocking {
+        targetAllowed: Boolean = true, response: String = "valid", cancel: Boolean = false, oversizedStream: Boolean = false, progressClock: () -> Long = System::nanoTime, maxWrites: Int? = null) = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val source = File.createTempFile("file-test", ".bin", context.cacheDir).apply { writeBytes(data) }
         if (oversizedStream) java.io.RandomAccessFile(source, "rw").use { it.setLength(MAX_FILE_BYTES + 1) }
@@ -84,7 +85,7 @@ class FileSendingTest {
                 else -> {}
             }
             true
-        }, ackTimeoutMs = 200)
+        }, ackTimeoutMs = 200, progressClock = progressClock)
         try {
             assertTrue(manager.sendFile(Uri.parse("content://file-tests/document")))
             assertFalse(manager.sendFile(Uri.parse("content://file-tests/document")))
@@ -97,6 +98,7 @@ class FileSendingTest {
             val succeeds = !denied && targetAllowed && response == "valid" && !cancel && !oversizedStream && (reportedSize == null || reportedSize <= MAX_FILE_BYTES)
             val paused = !cancel && response in listOf("timeout", "wrong-peer", "disconnect")
             assertEquals(item.errorMessage, if (succeeds) TransferStatus.COMPLETED else if (paused) TransferStatus.PAUSED else TransferStatus.FAILED, item.status)
+            if (maxWrites != null) assertTrue("Too many history writes: ${history.writes.size}", history.writes.size <= maxWrites)
             if (succeeds) { assertArrayEquals(data, received.toByteArray()); assertEquals(data.size.toLong(), item.transferredBytes) }
             if (!targetAllowed || denied || oversizedStream || reportedSize != null && reportedSize > MAX_FILE_BYTES) assertEquals(0, sent)
             if (cancel || response in listOf("reject", "bad-hash")) assertTrue(cancelled)
@@ -203,6 +205,9 @@ class FileSendingTest {
             } finally { job.cancelAndJoin(); source.delete() }
         }
     }
+
+    @Test fun `large send retains exact acknowledgements while coalescing history writes`() = scenario(
+        ByteArray(FILE_CHUNK_SIZE * 128) { (it % 256).toByte() }, progressClock = { 0L }, maxWrites = 3)
 
     @Test fun `multiple chunks and unknown provider size are streamed exactly`() = scenario(ByteArray(80000) { (it % 256).toByte() }, reportedSize = null)
     @Test fun `zero byte document completes only after Mac checksum acknowledgement`() = scenario(byteArrayOf())

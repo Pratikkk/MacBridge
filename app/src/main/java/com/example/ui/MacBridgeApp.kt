@@ -33,14 +33,16 @@ enum class NavigationDestination(val label: String, val icon: ImageVector, val t
 
 @Composable
 fun MacBridgeApp(bridgeManager: BridgeManager) {
+    var shareFiles by rememberSaveable { mutableStateOf(false) }
     val connection by bridgeManager.secureTransport.connectionState.collectAsState()
     AppShell(connection) { destination, navigate ->
         when (destination) {
             NavigationDestination.HOME -> BridgeHomeScreen(bridgeManager,
                 onNavigateToPairing = { navigate(NavigationDestination.DEVICES) },
-                onNavigateToClipboard = { navigate(NavigationDestination.CLIPBOARD) })
+                onNavigateToClipboard = { shareFiles = false; navigate(NavigationDestination.CLIPBOARD) },
+                onNavigateToFiles = { shareFiles = true; navigate(NavigationDestination.CLIPBOARD) })
             NavigationDestination.CLIPBOARD -> ShareScreen(bridgeManager,
-                onDevices = { navigate(NavigationDestination.DEVICES) })
+                onDevices = { navigate(NavigationDestination.DEVICES) }, files = shareFiles, onSelect = { shareFiles = it })
             NavigationDestination.DEVICES -> DevicesPairingScreen(bridgeManager)
             NavigationDestination.SETTINGS -> SettingsScreen(bridgeManager,
                 onDevices = { navigate(NavigationDestination.DEVICES) })
