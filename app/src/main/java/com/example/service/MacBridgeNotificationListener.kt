@@ -1,12 +1,16 @@
 package com.example.service
 
 import android.app.Notification
+import android.app.KeyguardManager
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.example.MacBridgeApplication
+import com.example.manager.notificationReplyTarget
+import com.example.manager.validNotificationReply
 import com.example.manager.notificationPayload
 import com.example.manager.notificationStillDismissible
 import com.example.manager.NotificationDestination
@@ -51,17 +55,19 @@ class MacBridgeNotificationListener : NotificationListenerService() {
             n.visibility == Notification.VISIBILITY_SECRET, sbn.isOngoing,
             n.flags and Notification.FLAG_GROUP_SUMMARY != 0, manager.notificationPreviewsEnabled())
         if (payload == null) {
-            manager.notificationActions.remove(sbn.key)
+            manager.notificationActions.remove(sbn.key); manager.notificationReplies.remove(sbn.key)
             manager.handleNotificationDismissedLocally(sbn.key)
         } else {
             val token = manager.notificationActions.observe(sbn.key, sbn.packageName, sbn.postTime, sbn.isClearable)
-            manager.handleOutgoingNotification(payload.copy(dismissToken = token))
+            val reply = if (manager.notificationPreviewsEnabled()) notificationReplyTarget(n, sbn.packageName) else null
+            val replyToken = manager.notificationReplies.observe(sbn.key, sbn.packageName, sbn.postTime, reply != null, reply)
+            manager.handleOutgoingNotification(payload.copy(dismissToken = token, replyToken = replyToken, hasReplyAction = replyToken != null))
         }
     }
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         super.onNotificationRemoved(sbn)
         if (sbn != null && sbn.packageName != packageName) {
-            bridge?.notificationActions?.remove(sbn.key)
+            bridge?.notificationActions?.remove(sbn.key); bridge?.notificationReplies?.remove(sbn.key)
             bridge?.handleNotificationDismissedLocally(sbn.key)
         }
     }
@@ -80,6 +86,28 @@ class MacBridgeNotificationListener : NotificationListenerService() {
                 listener.cancelNotification(key)
                 "REQUESTED" // Removal is confirmed by onNotificationRemoved, never assumed here.
             } catch (_: SecurityException) { "DENIED" }
+              catch (_: RuntimeException) { "UNAVAILABLE" }
+        }
+
+        internal fun reply(manager: BridgeManager, key: String, token: String, target: NotificationDestination, text: String?): String {
+            if (!validNotificationReply(text)) return "INVALID"
+            val listener = active ?: return "UNAVAILABLE"
+            if (listener.bridge !== manager || !isPermissionGranted(listener) || !target.allowed || !manager.notificationPreviewsEnabled()) return "DENIED"
+            if (listener.getSystemService(KeyguardManager::class.java).isDeviceLocked) return "LOCKED"
+            val record = manager.notificationReplies.take(key, token, target) ?: return "STALE"
+            if (!manager.isAppMirroringEnabled(record.pkg)) return "DENIED"
+            val original = record.reply ?: return "STALE"
+            return try {
+                val sbn = listener.getActiveNotifications(arrayOf(key))?.singleOrNull() ?: return "STALE"
+                val n = sbn.notification
+                if (record.pkg != sbn.packageName || record.posted != sbn.postTime || n.visibility == Notification.VISIBILITY_SECRET ||
+                    sbn.isOngoing || n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return "STALE"
+                val current = notificationReplyTarget(n, sbn.packageName) ?: return "STALE"
+                if (!original.sameAs(current)) return "STALE"
+                original.send(listener, text!!)
+                "REQUESTED" // The source app owns actual message delivery; never assume recipient delivery.
+            } catch (_: PendingIntent.CanceledException) { "UNAVAILABLE" }
+              catch (_: SecurityException) { "DENIED" }
               catch (_: RuntimeException) { "UNAVAILABLE" }
         }
 

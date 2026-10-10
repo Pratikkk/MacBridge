@@ -60,6 +60,29 @@ struct CompanionChecks {
         try require(actionCatalog.takeDismiss(id: actionAlert.id, token: newActionToken) == nil, "Restart retained action handles")
         print("PASS: dismiss handles bind original alert, reject stale/reused actions and clear across restart")
 
+        func replyEvent(_ token: String, text: String = "World") throws -> CompanionEvent {
+            let value: [String: Any] = ["event": "notification", "operation": "post", "connectionId": "current",
+                "notificationId": "reply-key", "appName": "Chat", "title": "Hello", "text": text, "replyToken": token]
+            return try JSONDecoder().decode(CompanionEvent.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        var replyCatalog = NotificationCatalog()
+        let replyAlert = try replyCatalog.post(replyEvent(actionToken), session: "current")!.0
+        try require(replyCatalog.takeReply(id: replyAlert.id, token: actionToken, text: " ") == nil, "Blank reply consumed action")
+        try require(replyCatalog.takeReply(id: replyAlert.id, token: "wrong", text: "Hi") == nil, "Wrong reply handle accepted")
+        try require(replyCatalog.takeReply(id: replyAlert.id, token: actionToken, text: "世界 🌉")?.key == "reply-key", "Unicode reply lost original target")
+        try require(replyCatalog.takeReply(id: replyAlert.id, token: actionToken, text: "again") == nil, "Reply reused")
+        _ = try replyCatalog.post(replyEvent(actionToken, text: "Updated text"), session: "current")
+        try require(replyCatalog.takeReply(id: replyAlert.id, token: actionToken, text: "again") == nil, "Same handle update reset one-use guard")
+        _ = try replyCatalog.post(replyEvent(newActionToken), session: "current")
+        try require(replyCatalog.takeReply(id: replyAlert.id, token: actionToken, text: "old") == nil, "Replaced reply accepted")
+        try require(replyCatalog.matchesResult(session: "current", key: "reply-key", token: newActionToken, reply: true), "Current reply result rejected")
+        try require(!replyCatalog.matchesResult(session: "old", key: "reply-key", token: newActionToken, reply: true), "Stale reply result accepted")
+        replyCatalog.reset()
+        try require(replyCatalog.takeReply(id: replyAlert.id, token: newActionToken, text: "restart") == nil, "Restart retained reply")
+        try require(NotificationCatalog.validReply(String(repeating: "🌉", count: 1024)), "Unicode boundary rejected")
+        try require(!NotificationCatalog.validReply(String(repeating: "🌉", count: 1025)) && !NotificationCatalog.validReply("bad\u{0}"), "Malformed reply accepted")
+        print("PASS: inline reply Unicode bounds, original generation, one-use handles and session teardown")
+
         let identity = BonjourIdentity(id: "mac-public-id", name: String(repeating: "🌉", count: 100),
             fingerprint: Array(repeating: "AB", count: 32).joined(separator: ":"), port: 8990, ipv6: true)
         try require(identity.valid && identity.serviceName.utf8.count <= 63, "Bonjour descriptor is invalid")

@@ -44,6 +44,10 @@ final class CompanionController: ObservableObject {
             guard let self, self.running, self.connected, self.notificationsEnabled, self.connectionId == session else { return }
             self.command(["action": "dismissNotification", "notificationId": key, "actionToken": token, "connectionId": session])
         }
+        alerts.onReply = { [weak self] key, token, session, text in
+            guard let self, self.running, self.connected, self.notificationsEnabled, self.connectionId == session, NotificationCatalog.validReply(text) else { return }
+            self.command(["action": "replyNotification", "notificationId": key, "actionToken": token, "connectionId": session, "replyText": text])
+        }
         alerts.onAccessDenied = { [weak self] in self?.setNotifications(false) }
         alerts.refreshPermission()
         bonjour.onStatus = { [weak self] value in self?.update(\.discoveryStatus, value) }

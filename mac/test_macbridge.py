@@ -75,6 +75,23 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual('phone', self.server.authenticate(stream))
         return stream
 
+    def test_reply_command_requires_original_live_session_and_never_replays(self):
+        token = '11111111-1111-1111-1111-111111111111'
+        self.server.notifications = True
+        self.server.peers['phone'] = {'publicKey': 'pinned-phone-key', 'name': 'Phone'}
+        self.server.active_id = 'phone'; self.server.active_stream = io.BytesIO(); self.server.connection_id = 'original'
+        self.server.notification_mirror.process(dict(type='NOTIFICATION', notificationId='key', packageName='com.chat', appName='Chat', title='Hello', text='World', replyToken=token), True)
+        command = dict(action='replyNotification', notificationId='key', actionToken=token, connectionId='original', replyText='世界 🌉')
+        with self.assertRaises(ValueError): self.server.handle_command(dict(command, connectionId='new'))
+        with self.assertRaises(ValueError): self.server.handle_command(dict(command, replyText='🌉'*1025))
+        self.server.notifications = False
+        with self.assertRaises(ValueError): self.server.handle_command(command)
+        self.server.notifications = True; self.server.handle_command(command)
+        self.assertEqual('世界 🌉', json.loads(self.server.active_stream.getvalue())['replyText'])
+        with self.assertRaises(ValueError): self.server.handle_command(command)
+        self.server.notification_mirror.reset(); self.server.active_stream = None
+        with self.assertRaises(ValueError): self.server.handle_command(command)
+
     def test_notification_dismiss_commands_require_enabled_original_live_session(self):
         token = '11111111-1111-1111-1111-111111111111'
         events = []

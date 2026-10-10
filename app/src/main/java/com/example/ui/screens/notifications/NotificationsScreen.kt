@@ -65,7 +65,7 @@ fun NotificationsScreen(bridgeManager: BridgeManager, modifier: Modifier = Modif
                 Switch(checked = enabled, enabled = access, onCheckedChange = { enabled = it; bridgeManager.setAppMirroringEnabled(pkg, it) })
             } }
         }
-        item { Text("Previews may contain private messages or codes. Mac notification visibility is also controlled by macOS. Removing a mirrored alert on Mac does not dismiss it on your phone; use Dismiss on Phone on the Mac alert to request Android removal. Replies are planned.", color = Slate400) }
+        item { Text("Previews may contain private messages or codes. Mac notification visibility is also controlled by macOS. Removing a mirrored alert on Mac does not dismiss it on your phone; use Dismiss on Phone on the Mac alert to request Android removal. Reply is available for supported apps with previews enabled and an unlocked Android 12+ phone. Replies are never retried.", color = Slate400) }
     }
 }
 

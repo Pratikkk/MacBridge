@@ -259,18 +259,20 @@ class Companion:
             if not isinstance(path, str) or not path or len(path) > 4096:
                 raise ValueError('Choose a file to send')
             self.start_file(path, command.get('connectionId'))
-        elif action == 'dismissNotification':
+        elif action in ('dismissNotification', 'replyNotification'):
             with self.lock:
                 if not self.notifications or not self.active_id or self.active_id not in self.peers or not self.active_stream or command.get('connectionId') != self.connection_id:
                     raise ValueError('Reconnect the original phone and enable notifications before dismissing')
                 key = command.get('notificationId')
                 if not isinstance(key, str) or not key.strip() or len(key.encode('utf-8')) > 512:
                     raise ValueError('Invalid notification action')
-                frame = self.notification_mirror.request_dismiss(key, command.get('actionToken'))
+                frame = (self.notification_mirror.request_reply(key, command.get('actionToken'), command.get('replyText'))
+                    if action == 'replyNotification' else self.notification_mirror.request_dismiss(key, command.get('actionToken')))
                 try:
                     write_frame(self.active_stream, frame)
                 except OSError:
                     self.notification_mirror.pending.pop(key, None)
+                    self.notification_mirror.reply_pending.pop(key, None)
                     raise
         elif action == 'resumeFileSend':
             self.resume_file(command.get('connectionId'))

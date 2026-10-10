@@ -54,7 +54,7 @@ These checks cover identity and code rejection, Unicode, bounded and malformed f
 
 ## Remaining work
 
-The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage, notification actions, and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
 
 ## Pair by QR
 
@@ -159,7 +159,7 @@ On Android, enable **Devices → Notification sharing** for your Mac. Open **Set
 
 New alerts from selected apps are forwarded only to the connected, authenticated Mac. **Show message previews** starts off: the Mac receives the app name and a generic alert. Enable previews deliberately to include message text. Secret, ongoing and group-summary notifications are excluded. Updates replace the same alert; duplicate content does not create another banner. Removing an alert on Android removes its Mac mirror. Disabling an app, hiding previews, revoking Android access or disconnecting clears the applicable Mac alerts. macOS permission revocation is checked when the companion becomes active and after delivery failure.
 
-Notification content is not saved to Android history, engine files or diagnostic logs. In-memory catalogs cap at 100 alerts and event queues at 64. Delivery is best effort: bursts can be dropped, missed updates are not replayed after reconnect, and there is no delivery receipt. macOS may retain displayed alerts in its own Notification Center until removed. Eligible alerts offer an explicit Dismiss on Phone action; inline replies remain planned. The standalone CLI does not display notifications.
+Notification content is not saved to Android history, engine files or diagnostic logs. In-memory catalogs cap at 100 alerts and event queues at 64. Delivery is best effort: bursts can be dropped, missed updates are not replayed after reconnect, and there is no delivery receipt. macOS may retain displayed alerts in its own Notification Center until removed. Eligible alerts offer an explicit Dismiss on Phone action; supported alerts also offer Reply. The standalone CLI does not display notifications.
 
 A manual device check should enable both systems’ access, select one app, receive a redacted alert, enable previews and receive an update, remove it on Android, disable the app, revoke access, and disconnect/reconnect without old content replay. Native catalog and permission/session logic are covered automatically; actual macOS banner placement, Android system permission dialogs and system cancellation require this manual check.
 
@@ -170,3 +170,11 @@ On an eligible Mac alert, choose **Dismiss on Phone** to request removal from An
 Dismiss handles are one-use, remain in memory, and bind to the notification generation, authenticated Mac identity and connection. Updating/removing an alert, disabling its app or Mac permission, hiding previews, losing Android access, restarting or reconnecting invalidates old actions. Android rechecks the live notification’s package, posting time and clearability before cancellation; secret, ongoing and group-summary notifications cannot be dismissed through this feature. **Phone received dismiss request** means the system cancellation call was accepted; removal is confirmed by the listener event. Failed or stale requests are not replayed.
 
 Android exposes cancellation by notification key rather than an atomic generation comparison; a source app can update an alert between the final live check and the platform call. Automatic checks cover handle/session/permission rejection and real TLS request/result/removal routing. Actual macOS action-button behavior and Android system cancellation remain a manual device check tracked on GitHub.
+
+### Reply from Mac
+
+Enable **Show message previews** on Android, then choose **Reply** on a supported Mac notification, type your message and choose **Send**. The phone must be unlocked. Replies require Android 12+ so the bridge can inspect action mutability and type. Only one unambiguous free-form RemoteInput action belonging to the notifying app is supported; choice-only, activity-launching, immutable, foreign-app and authentication-required actions offer no Reply button. Other notifications still mirror normally.
+
+Each reply uses its own one-use generation/identity/session handle. Android rechecks access, per-Mac/app sharing, previews, lock state, the live notification and original app action before passing RemoteInput text to the original PendingIntent. Reply text is limited to 4096 UTF-8 bytes, supports Unicode/newlines, and rejects blank, malformed or control-character input. Text and app action capabilities stay in bounded memory; they are not saved in bridge history or logs. A failed/stale action is never automatically retried; wait for a new app notification or reply on the phone.
+
+**Reply passed to phone app** reports acceptance of the PendingIntent call, not delivery to the message recipient. The source app controls delivery and may require its own permissions/network state. Android provides no atomic notification-generation check and PendingIntent send, and source apps can update a PendingIntent's backing extras; the bridge cannot guarantee an immutable conversation destination beyond the original capability and live generation checks. Actual third-party app replies and native text-entry UI remain manual acceptance work in issue #24.

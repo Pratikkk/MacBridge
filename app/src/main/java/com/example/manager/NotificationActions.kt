@@ -3,17 +3,17 @@ package com.example.manager
 import java.util.UUID
 
 internal data class NotificationGeneration(val key: String, val pkg: String, val posted: Long, val token: String,
-    val target: NotificationDestination? = null)
+    val target: NotificationDestination? = null, val reply: NotificationReplyTarget? = null)
 
 /** One-use handles for actually forwarded alerts, never persisted across process/session changes. */
 internal class NotificationActions(private val token: () -> String = { UUID.randomUUID().toString() }) {
     private val records = linkedMapOf<String, NotificationGeneration>()
-    @Synchronized fun observe(key: String, pkg: String, posted: Long, clearable: Boolean): String? {
+    @Synchronized fun observe(key: String, pkg: String, posted: Long, clearable: Boolean, reply: NotificationReplyTarget? = null): String? {
         records.remove(key)
         if (!clearable) return null
         if (records.size >= 100) records.remove(records.keys.first())
         val value = token()
-        records[key] = NotificationGeneration(key, pkg, posted, value)
+        records[key] = NotificationGeneration(key, pkg, posted, value, reply = reply)
         return value
     }
     @Synchronized fun bind(key: String, token: String, target: NotificationDestination) {

@@ -8,6 +8,42 @@ def alert(key='key', **values):
 
 
 class NotificationMirrorTests(unittest.TestCase):
+    def test_reply_unicode_one_use_generation_result_and_removal(self):
+        token = '11111111-1111-1111-1111-111111111111'
+        new = '22222222-2222-2222-2222-222222222222'
+        mirror = NotificationMirror()
+        mirror.process(alert(replyToken=token, hasReplyAction=True), True)
+        reply = mirror.request_reply('key', token, 'Hello 世界 🌉\nThanks')
+        self.assertEqual('Hello 世界 🌉\nThanks', reply['replyText'])
+        self.assertEqual('REPLY', reply['actionType'])
+        with self.assertRaises(ValueError): mirror.request_reply('key', token, 'again')
+        result = dict(type='NOTIFICATION_ACTION', actionType='REPLY_RESULT', notificationId='key', actionToken=token, status='REQUESTED')
+        self.assertEqual(token, mirror.process(result, True)[0]['replyToken'])
+        self.assertEqual([], mirror.process(result, True))
+        with self.assertRaises(ValueError): mirror.request_reply('key', token, 'again')
+        mirror.process(dict(alert(replyToken=token), text='Updated text'), True)
+        with self.assertRaises(ValueError): mirror.request_reply('key', token, 'same handle')
+        mirror.process(alert(replyToken=new), True)
+        with self.assertRaises(ValueError): mirror.request_reply('key', token, 'old')
+        mirror.request_reply('key', new, 'new')
+        self.assertEqual([], mirror.process(result, True))
+        mirror.remove('key')
+        self.assertFalse(mirror.reply_pending)
+        with self.assertRaises(ValueError): mirror.request_reply('key', new, 'removed')
+        mirror.process(alert(replyToken=token), True); mirror.reset()
+        with self.assertRaises(ValueError): mirror.request_reply('key', token, 'restart')
+
+    def test_reply_malformed_text_and_handles_do_not_consume_valid_action(self):
+        token = '11111111-1111-1111-1111-111111111111'
+        for bad in ('bad', {}, 'x'*10000):
+            with self.assertRaises(ValueError): NotificationMirror().process(alert(replyToken=bad), True)
+        mirror = NotificationMirror(); mirror.process(alert(replyToken=token), True)
+        for bad in (None, '', ' \n', 'bad\x00', 'bad\x7f', '\ud800', '🌉'*1025):
+            with self.assertRaises(ValueError): mirror.request_reply('key', token, bad)
+        self.assertEqual('🌉'*1024, mirror.request_reply('key', token, '🌉'*1024)['replyText'])
+        unsupported = NotificationMirror(); unsupported.process(alert(), True)
+        with self.assertRaises(ValueError): unsupported.request_reply('key', token, 'hello')
+
     def test_dismiss_handles_are_current_one_use_and_results_are_matched(self):
         mirror = NotificationMirror()
         token = '11111111-1111-1111-1111-111111111111'
