@@ -131,7 +131,7 @@ class FileTransferManager(
         }
     }
 
-    fun sendFile(uri: Uri): Boolean = start(uri, null)
+    fun sendFile(uri: Uri, reviewedPeer: PairedDevice? = null): Boolean = start(uri, null, reviewedPeer)
 
     suspend fun resumeTransfer(id: String): Boolean {
         initialized.await()
@@ -142,7 +142,7 @@ class FileTransferManager(
         return start(null, value)
     }
 
-    private fun start(uri: Uri?, resumed: Paused?): Boolean {
+    private fun start(uri: Uri?, resumed: Paused?, reviewedPeer: PairedDevice? = null): Boolean {
         if (paused != null && resumed == null) return false
         if (!occupied.compareAndSet(false, true)) return false
         busyState.value = true
@@ -163,6 +163,9 @@ class FileTransferManager(
                 insist(resumed != null || paused == null) { "Resume or cancel the paused transfer first." }
                 fileTransferDao.insertOrUpdate(item)
                 destination = target() ?: throw TransferFailure("Connect to your Mac and enable File sharing in Devices.")
+                insist(reviewedPeer == null || (destination.device.id == reviewedPeer.id && destination.device.fingerprint == reviewedPeer.fingerprint)) {
+                    "The selected Mac changed. Share the file again and review the destination."
+                }
                 expectedPeer = destination.device.id
                 if (resumed != null) {
                     insist(destination.device.id == resumed.destination.device.id && destination.device.fingerprint == resumed.destination.device.fingerprint) { "Reconnect the original paired Mac to resume." }

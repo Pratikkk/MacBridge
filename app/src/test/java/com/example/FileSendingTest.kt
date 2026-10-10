@@ -50,7 +50,7 @@ class FileSendingTest {
         override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?) = 0
     }
     private fun scenario(data: ByteArray, denied: Boolean = false, reportedSize: Long? = data.size.toLong(),
-        targetAllowed: Boolean = true, response: String = "valid", cancel: Boolean = false, oversizedStream: Boolean = false, progressClock: () -> Long = System::nanoTime, maxWrites: Int? = null) = runBlocking {
+        targetAllowed: Boolean = true, response: String = "valid", cancel: Boolean = false, oversizedStream: Boolean = false, progressClock: () -> Long = System::nanoTime, maxWrites: Int? = null, reviewedPeer: PairedDevice? = null) = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val source = File.createTempFile("file-test", ".bin", context.cacheDir).apply { writeBytes(data) }
         if (oversizedStream) java.io.RandomAccessFile(source, "rw").use { it.setLength(MAX_FILE_BYTES + 1) }
@@ -88,7 +88,7 @@ class FileSendingTest {
             true
         }, ackTimeoutMs = 200, progressClock = progressClock)
         try {
-            assertTrue(manager.sendFile(Uri.parse("content://file-tests/document")))
+            assertTrue(manager.sendFile(Uri.parse("content://file-tests/document"), reviewedPeer))
             assertFalse(manager.sendFile(Uri.parse("content://file-tests/document")))
             if (cancel) {
                 withTimeout(5000) { waiting.await() }
@@ -96,12 +96,13 @@ class FileSendingTest {
             }
             withTimeout(5000) { manager.busy.first { !it } }
             val item = history.values.values.single()
-            val succeeds = !denied && targetAllowed && response == "valid" && !cancel && !oversizedStream && (reportedSize == null || reportedSize <= MAX_FILE_BYTES)
+            val destinationMatches = reviewedPeer == null || (reviewedPeer.id == mac.id && reviewedPeer.fingerprint == mac.fingerprint)
+            val succeeds = destinationMatches && !denied && targetAllowed && response == "valid" && !cancel && !oversizedStream && (reportedSize == null || reportedSize <= MAX_FILE_BYTES)
             val paused = !cancel && response in listOf("timeout", "wrong-peer", "disconnect")
             assertEquals(item.errorMessage, if (succeeds) TransferStatus.COMPLETED else if (paused) TransferStatus.PAUSED else TransferStatus.FAILED, item.status)
             if (maxWrites != null) assertTrue("Too many history writes: ${history.writes.size}", history.writes.size <= maxWrites)
             if (succeeds) { assertArrayEquals(data, received.toByteArray()); assertEquals(data.size.toLong(), item.transferredBytes) }
-            if (!targetAllowed || denied || oversizedStream || reportedSize != null && reportedSize > MAX_FILE_BYTES) assertEquals(0, sent)
+            if (!destinationMatches || !targetAllowed || denied || oversizedStream || reportedSize != null && reportedSize > MAX_FILE_BYTES) assertEquals(0, sent)
             if (response.startsWith("remote-cancel")) assertTrue(item.errorMessage!!.startsWith("Cancelled by your Mac"))
             if (cancel || response in listOf("reject", "bad-hash", "remote-cancel", "remote-cancel-chunk")) assertTrue(cancelled)
             if (paused) {
@@ -229,6 +230,12 @@ class FileSendingTest {
     @Test fun `large send retains exact acknowledgements while coalescing history writes`() = scenario(
         ByteArray(FILE_CHUNK_SIZE * 128) { (it % 256).toByte() }, progressClock = { 0L }, maxWrites = 3)
 
+    @Test fun `reviewed share destination receives verified Unicode document`() = scenario(byteArrayOf(1, 2, 3), reviewedPeer =
+        PairedDevice("mac", "Chosen Mac", "pin", "key", "127.0.0.1", allowFileTransfer = true))
+    @Test fun `connection switch after share review sends nothing to another Mac`() = scenario(byteArrayOf(1), reviewedPeer =
+        PairedDevice("other", "Chosen Mac", "pin", "key", "127.0.0.1", allowFileTransfer = true))
+    @Test fun `identity change after share review sends no file frames`() = scenario(byteArrayOf(1), reviewedPeer =
+        PairedDevice("mac", "Chosen Mac", "old-pin", "key", "127.0.0.1", allowFileTransfer = true))
     @Test fun `multiple chunks and unknown provider size are streamed exactly`() = scenario(ByteArray(80000) { (it % 256).toByte() }, reportedSize = null)
     @Test fun `zero byte document completes only after Mac checksum acknowledgement`() = scenario(byteArrayOf())
     @Test fun `disabled sharing never reads or sends document`() = scenario(byteArrayOf(1), targetAllowed = false)

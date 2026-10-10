@@ -24,6 +24,8 @@ import com.example.ui.screens.ShareScreen
 import com.example.ui.screens.devices.DevicesPairingScreen
 import com.example.ui.screens.settings.SettingsScreen
 import com.example.ui.theme.*
+import android.net.Uri
+import com.example.ui.screens.files.SharedFileDialog
 
 enum class NavigationDestination(val label: String, val icon: ImageVector, val tag: String) {
     HOME("Home", Icons.Outlined.Home, "nav_bridge"),
@@ -33,10 +35,21 @@ enum class NavigationDestination(val label: String, val icon: ImageVector, val t
 }
 
 @Composable
-fun MacBridgeApp(bridgeManager: BridgeManager) {
+fun MacBridgeApp(bridgeManager: BridgeManager, sharedFile: Uri? = null, onDismissShare: () -> Unit = {},
+    onShareSent: () -> Unit = onDismissShare) {
     var shareFiles by rememberSaveable { mutableStateOf(false) }
+    var reviewOpen by rememberSaveable(sharedFile?.toString()) { mutableStateOf(true) }
     val connection by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
-    AppShell(connection) { destination, navigate ->
+    AppShell(connection, banner = {
+        if (sharedFile != null && !reviewOpen) TextButton(onClick = { reviewOpen = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("File waiting to send · Review")
+        }
+    }) { destination, navigate ->
+        if (sharedFile != null && reviewOpen) SharedFileDialog(bridgeManager, sharedFile,
+            onDismiss = onDismissShare,
+            onSent = { onShareSent(); navigate(NavigationDestination.HOME) },
+            onDevices = { reviewOpen = false; navigate(NavigationDestination.DEVICES) },
+            onHome = { reviewOpen = false; navigate(NavigationDestination.HOME) })
         when (destination) {
             NavigationDestination.HOME -> BridgeHomeScreen(bridgeManager,
                 onNavigateToPairing = { navigate(NavigationDestination.DEVICES) },
@@ -53,6 +66,7 @@ fun MacBridgeApp(bridgeManager: BridgeManager) {
 
 @Composable
 fun AppShell(connection: ConnectionState,
+    banner: @Composable () -> Unit = {},
     content: @Composable (NavigationDestination, (NavigationDestination) -> Unit) -> Unit) {
     var current by rememberSaveable { mutableStateOf(NavigationDestination.HOME) }
     val screens = rememberSaveableStateHolder()
@@ -60,11 +74,14 @@ fun AppShell(connection: ConnectionState,
     BackHandler(current != NavigationDestination.HOME) { current = NavigationDestination.HOME }
     Scaffold(containerColor = Slate950,
         topBar = {
+            Column {
             Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 24.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("MacBridge", style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f).padding(end = 12.dp))
                 ConnectionStatusChip(connection)
+            }
+            banner()
             }
         },
         bottomBar = {
