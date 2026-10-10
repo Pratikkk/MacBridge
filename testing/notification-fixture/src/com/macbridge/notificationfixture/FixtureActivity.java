@@ -25,7 +25,15 @@ public final class FixtureActivity extends Activity {
         remove.setText("Remove test alert");
         remove.setOnClickListener(view -> getSystemService(android.app.NotificationManager.class).cancel(FixtureReceiver.ID));
         layout.addView(remove);
-        setContentView(layout);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(layout);
+        scroll.setOnApplyWindowInsetsListener((view, insets) -> {
+            android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return insets;
+        });
+        setContentView(scroll);
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
     }
