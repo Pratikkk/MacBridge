@@ -4,6 +4,12 @@ An Android-to-Mac local-network bridge. The current milestone supports authentic
 
 The Android app pins the Mac TLS public key and proves its own Keystore identity with a signed challenge. Pairing codes expire after five minutes and work once. New Android peers start with sharing permissions disabled.
 
+## Milestones and progress
+
+Follow [MacBridge — Milestones and progress](https://github.com/users/Pratikkk/projects/2) for delivered features and upcoming work. [Repository milestones](https://github.com/Pratikkk/MacBridge/milestones) group the feature issues. Todo means planned, In Progress means implementation has started, and Done means the feature passed applicable validation and its commit was pushed and verified. Issues record acceptance checks, delivery evidence and remaining limits; planned items have no implied deadline or implementation order.
+
+Feature work updates the project as part of the [project workflow](AGENTS.md): start the matching issue, record scope changes or blockers, then attach the verified commit, validation results and applicable Android installation outcome before closing it and marking Done.
+
 ## Android development
 
 Open the project in Android Studio with the Android SDK required by `app/build.gradle.kts`, or configure `local.properties` with your SDK path. Use a JDK supported by the checked-in Gradle version. This checkout has been tested with Android Studio's bundled JDK and Gradle 9.8.0.
