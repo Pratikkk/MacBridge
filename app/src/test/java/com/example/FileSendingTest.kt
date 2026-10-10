@@ -29,6 +29,7 @@ class FileSendingTest {
     private class History : FileTransferDao {
         val values = ConcurrentHashMap<String, FileTransferItem>()
         val writes = java.util.concurrent.CopyOnWriteArrayList<FileTransferItem>()
+        override fun getHomeTransfers() = getAllTransfers()
         override fun getAllTransfers(): Flow<List<FileTransferItem>> = flowOf(values.values.toList())
         override suspend fun getTransfer(transferId: String) = values[transferId]
         override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }

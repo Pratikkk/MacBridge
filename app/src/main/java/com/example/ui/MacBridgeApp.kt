@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
@@ -34,7 +35,7 @@ enum class NavigationDestination(val label: String, val icon: ImageVector, val t
 @Composable
 fun MacBridgeApp(bridgeManager: BridgeManager) {
     var shareFiles by rememberSaveable { mutableStateOf(false) }
-    val connection by bridgeManager.secureTransport.connectionState.collectAsState()
+    val connection by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
     AppShell(connection) { destination, navigate ->
         when (destination) {
             NavigationDestination.HOME -> BridgeHomeScreen(bridgeManager,

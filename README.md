@@ -30,6 +30,8 @@ keytool -genkeypair -keystore debug.keystore -storepass android -keypass android
 
 The real TLS integration tests require Python 3 and OpenSSL on PATH and permission to bind loopback sockets. They start an isolated Mac test peer and never modify the real Mac clipboard.
 
+See [Android performance measurements and profiling](docs/android-performance.md) for the read-only physical-device idle sampler, lifecycle/query behavior, regression checks, and measurement limits.
+
 ## Mac companion
 
 See [Mac setup and usage](mac/README.md). Build and launch the native menu-bar app:

@@ -1,5 +1,6 @@
 package com.example.ui.screens.bridge
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -25,10 +26,10 @@ import com.example.ui.theme.*
 @Composable
 fun BridgeHomeScreen(bridgeManager: BridgeManager, onNavigateToPairing: () -> Unit,
     onNavigateToClipboard: () -> Unit, onNavigateToFiles: () -> Unit, modifier: Modifier = Modifier) {
-    val state by bridgeManager.secureTransport.connectionState.collectAsState()
-    val devices by bridgeManager.pairedDevices.collectAsState()
-    val transfers by bridgeManager.fileTransfers.collectAsState()
-    val busy by bridgeManager.fileTransferManager.busy.collectAsState()
+    val state by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
+    val devices by bridgeManager.pairedDevices.collectAsStateWithLifecycle()
+    val transfers by bridgeManager.homeFileTransfers.collectAsStateWithLifecycle()
+    val busy by bridgeManager.fileTransferManager.busy.collectAsStateWithLifecycle()
     val actions = rememberFileTransferActions(bridgeManager)
     val availability = sharingUiState(state, devices, SharingFeature.FILES)
     HomeWorkspace(state, devices, onConnect = {

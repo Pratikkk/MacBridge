@@ -1,5 +1,6 @@
 package com.example.ui.screens.clipboard
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,9 +32,9 @@ import java.util.Date
 fun ClipboardScreen(bridgeManager: BridgeManager, onManageDevices: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val systemClipboard = LocalClipboardManager.current
-    val history by bridgeManager.clipboardHistory.collectAsState()
-    val state by bridgeManager.secureTransport.connectionState.collectAsState()
-    val devices by bridgeManager.pairedDevices.collectAsState()
+    val history by bridgeManager.clipboardHistory.collectAsStateWithLifecycle()
+    val state by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
+    val devices by bridgeManager.pairedDevices.collectAsStateWithLifecycle()
     var sending by remember { mutableStateOf(false) }
     var feedback by remember { mutableStateOf<String?>(null) }
     ClipboardWorkspace(history, sharingUiState(state, devices), sending, feedback,

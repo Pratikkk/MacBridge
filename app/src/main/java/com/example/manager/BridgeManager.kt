@@ -18,8 +18,7 @@ import com.example.network.PairingFailure
 import com.example.service.MacBridgeForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
+import com.example.ui.uiStateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -36,16 +35,19 @@ class BridgeManager(
     val identityManager = IdentityManager(context)
 
     val pairedDevices = database.pairedDeviceDao().getAllPairedDevices()
-        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+        .uiStateIn(scope, emptyList())
 
     val clipboardHistory = database.clipboardDao().getAllClips()
-        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+        .uiStateIn(scope, emptyList())
 
     val fileTransfers = database.fileTransferDao().getAllTransfers()
-        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+        .uiStateIn(scope, emptyList())
+
+    val homeFileTransfers = database.fileTransferDao().getHomeTransfers()
+        .uiStateIn(scope, emptyList())
 
     val mirroredNotifications = database.notificationDao().getAllNotifications()
-        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+        .uiStateIn(scope, emptyList())
 
     val nsdManager = NsdDiscoveryManager(
         context = context,

@@ -1,5 +1,6 @@
 package com.example.ui.screens.files
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -78,10 +79,10 @@ internal fun rememberFileTransferActions(scope: CoroutineScope,
 fun FileTransferScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
     val context = LocalContext.current
     val actions = rememberFileTransferActions(bridgeManager)
-    val state by bridgeManager.secureTransport.connectionState.collectAsState()
-    val devices by bridgeManager.pairedDevices.collectAsState()
-    val history by bridgeManager.fileTransfers.collectAsState()
-    val busy by bridgeManager.fileTransferManager.busy.collectAsState()
+    val state by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
+    val devices by bridgeManager.pairedDevices.collectAsStateWithLifecycle()
+    val history by bridgeManager.fileTransfers.collectAsStateWithLifecycle()
+    val busy by bridgeManager.fileTransferManager.busy.collectAsStateWithLifecycle()
     val availability = sharingUiState(state, devices, SharingFeature.FILES)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && !bridgeManager.fileTransferManager.sendFile(uri)) Toast.makeText(context, "Resume or cancel your current transfer first.", Toast.LENGTH_LONG).show()

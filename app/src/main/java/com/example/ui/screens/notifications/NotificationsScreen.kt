@@ -1,5 +1,6 @@
 package com.example.ui.screens.notifications
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Intent
 import android.provider.Settings
 import android.widget.Toast
@@ -41,7 +42,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -70,7 +70,7 @@ fun NotificationsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val notifications by bridgeManager.mirroredNotifications.collectAsState()
+    val notifications by bridgeManager.mirroredNotifications.collectAsStateWithLifecycle()
     val isPermissionGranted = MacBridgeNotificationListener.isPermissionGranted(context)
     val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 

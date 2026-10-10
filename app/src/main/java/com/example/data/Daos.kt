@@ -56,6 +56,15 @@ interface FileTransferDao {
     @Query("SELECT * FROM file_transfers ORDER BY timestamp DESC")
     fun getAllTransfers(): Flow<List<FileTransferItem>>
 
+    // Materialize only actionable transfers and the latest row in each direction on Home.
+    // Full history remains available in Files and for restart recovery.
+    @Query("""SELECT * FROM file_transfers
+        WHERE status IN ('PENDING', 'TRANSFERRING', 'PAUSED')
+        OR transferId = (SELECT transferId FROM file_transfers WHERE direction = 'INCOMING' ORDER BY timestamp DESC, transferId DESC LIMIT 1)
+        OR transferId = (SELECT transferId FROM file_transfers WHERE direction = 'OUTGOING' ORDER BY timestamp DESC, transferId DESC LIMIT 1)
+        ORDER BY timestamp DESC, transferId DESC""")
+    fun getHomeTransfers(): Flow<List<FileTransferItem>>
+
     @Query("SELECT * FROM file_transfers WHERE transferId = :transferId LIMIT 1")
     suspend fun getTransfer(transferId: String): FileTransferItem?
 

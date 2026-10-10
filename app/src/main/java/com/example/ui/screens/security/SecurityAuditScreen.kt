@@ -1,5 +1,6 @@
 package com.example.ui.screens.security
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,7 +45,6 @@ import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -90,20 +90,25 @@ fun SecurityAuditScreen(
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val rules = remember { SecurityBaselineAuditor.getAuditRules() }
-    val logs by DiagnosticLogger.logsFlow.collectAsState()
 
     var selectedSection by remember { mutableIntStateOf(0) }
+    val logs = if (selectedSection == 1) {
+        val visibleLogs by DiagnosticLogger.logsFlow.collectAsStateWithLifecycle()
+        visibleLogs
+    } else emptyList()
     val sections = listOf("Control Status", "Diagnostic Logs", "Keystore")
 
     var selectedLogLevel by remember { mutableStateOf<LogLevel?>(null) }
     var searchQuery by remember { mutableStateOf("") }
 
-    val filteredLogs = logs.filter { log ->
-        (selectedLogLevel == null || log.level == selectedLogLevel) &&
+    val filteredLogs = remember(logs, selectedLogLevel, searchQuery) {
+        logs.filter { log ->
+            (selectedLogLevel == null || log.level == selectedLogLevel) &&
                 (searchQuery.isBlank() || log.message.contains(searchQuery, ignoreCase = true) || log.tag.contains(searchQuery, ignoreCase = true))
+        }
     }
 
-    val sdf = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+    val sdf = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
 
     LazyColumn(
         modifier = modifier
@@ -405,8 +410,8 @@ fun LogEntryItem(log: SystemLogEntry, timeStr: String) {
 
 @Composable
 fun KeystoreDetailsCard(bridgeManager: BridgeManager) {
-    val fingerprint = bridgeManager.identityManager.getFingerprint()
-    val pubKeyB64 = bridgeManager.identityManager.getPublicKeyBase64()
+    val fingerprint = remember(bridgeManager.identityManager) { bridgeManager.identityManager.getFingerprint() }
+    val pubKeyB64 = remember(bridgeManager.identityManager) { bridgeManager.identityManager.getPublicKeyBase64() }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Slate900),

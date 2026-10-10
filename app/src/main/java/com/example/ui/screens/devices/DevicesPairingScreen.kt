@@ -1,5 +1,6 @@
 package com.example.ui.screens.devices
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,8 +38,8 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun DevicesPairingScreen(bridgeManager: BridgeManager, modifier: Modifier = Modifier) {
-    val devices by bridgeManager.pairedDevices.collectAsState()
-    val state by bridgeManager.secureTransport.connectionState.collectAsState()
+    val devices by bridgeManager.pairedDevices.collectAsStateWithLifecycle()
+    val state by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
     var showPairing by rememberSaveable { mutableStateOf(false) }
     // Keep one-time secrets in memory only, never in saved instance state.
     var input by remember { mutableStateOf("") }
