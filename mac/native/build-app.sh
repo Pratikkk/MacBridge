@@ -12,6 +12,7 @@ cp ../file_sender.py "$app_dir/Contents/Resources/file_sender.py"
 cp ../file_receiver.py "$app_dir/Contents/Resources/file_receiver.py"
 cp ../transfer_state.py "$app_dir/Contents/Resources/transfer_state.py"
 cp ../macbridge.py "$app_dir/Contents/Resources/macbridge.py"
+cp ../../assets/branding/MacBridge.icns "$app_dir/Contents/Resources/MacBridge.icns"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -20,6 +21,7 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.macbridge.companion</string>
 <key>CFBundleName</key><string>MacBridge</string>
 <key>CFBundleDisplayName</key><string>MacBridge</string>
+<key>CFBundleIconFile</key><string>MacBridge.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.2.0</string>
 <key>CFBundleVersion</key><string>2</string>

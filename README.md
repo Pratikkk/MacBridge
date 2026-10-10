@@ -128,3 +128,9 @@ A disconnected receiver can discard its partial locally. The sender learns that 
 ### Transfers on Android Home
 
 Home shows live sending and receiving progress above the connection card, including filenames, percentages and byte counts. Cancel either direction directly, or resume a paused send after reconnecting. The latest verified incoming file has **Save As…** on Home, even while an outgoing transfer continues. When transfers finish, their latest outcomes appear below the connection card. Home retains only the latest outcome in each idle direction; the complete history stays in Share → Files. Home and Files use the same save, resume and cancel handlers and verification rules.
+
+### App icon
+
+Android and Mac share a white suspension-bridge mark on charcoal, matching the monochrome interface. Android includes adaptive and themed monochrome icons plus legacy density and round variants. The Mac companion bundle includes its native ICNS icon; its menu-bar connection symbol remains the standard compact status glyph.
+
+The editable geometry lives in `assets/branding/icon.json`, with SVG and PNG previews alongside the Mac ICNS. Regenerate all platform assets on macOS with `python3 tools/generate-icons.py` (Python 3 and Command Line Tools; no third-party packages). Generated launcher resources and the ICNS are committed so normal app builds do not require regeneration.

@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/macbridge_icon_1791534389771"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M35.3,35.3 L35.3,72.7 M72.7,35.3 L72.7,72.7" android:strokeColor="#FFFFFF" android:strokeWidth="5.1" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M35.3,40.4 C45.5,60.8,62.5,60.8,72.7,40.4" android:strokeColor="#FFFFFF" android:strokeWidth="5.1" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M47.2,54.85 L47.2,72.7 M60.8,54.85 L60.8,72.7" android:strokeColor="#FFFFFF" android:strokeWidth="3.4" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M30.2,72.7 L77.8,72.7" android:strokeColor="#FFFFFF" android:strokeWidth="5.1" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>
