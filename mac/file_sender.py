@@ -11,6 +11,7 @@ import uuid
 import time
 
 from file_receiver import CHUNK_SIZE, MAX_FILE_SIZE, RESUME_TTL_SECONDS
+from transfer_state import private_file, file_digest, metadata
 
 
 class TransferDisconnected(Exception):
@@ -18,7 +19,7 @@ class TransferDisconnected(Exception):
 
 
 class FileSender:
-    def __init__(self, directory, send, report, timeout=15, progress_clock=time.monotonic):
+    def __init__(self, directory, send, report, timeout=15, progress_clock=time.monotonic, state=None):
         self.directory = Path(directory)
         self.send = send
         self.report = report
@@ -37,6 +38,32 @@ class FileSender:
         self.checksum = self.name = None
         self.paused_at = 0
         self.interrupted = False
+        self.state = state
+        self.deadline = 0
+        if state:
+            self.restore()
+
+    def restore(self):
+        value = self.state.load().get('outgoing')
+        try:
+            metadata(value, MAX_FILE_SIZE)
+            if not time.time() < value['expires'] <= time.time() + RESUME_TTL_SECONDS + 1:
+                raise ValueError('Expired checkpoint')
+            snapshot = private_file(self.directory, value['snapshot'], '.outgoing-')
+            if snapshot.stat().st_size != value['size'] or file_digest(snapshot).hexdigest() != value['checksum']:
+                raise ValueError('Corrupt snapshot')
+            self.transfer_id, self.name, self.file_size, self.checksum = value['id'], value['name'], value['size'], value['checksum']
+            self.snapshot, self.deadline = snapshot, value['expires']
+            self.paused_at = time.monotonic() - (RESUME_TTL_SECONDS - (self.deadline - time.time()))
+            self.result = 'paused'
+            self.finished.set()
+        except (OSError, ValueError, TypeError, KeyError):
+            self.state.clear()
+
+    def checkpoint(self):
+        if self.state and self.snapshot:
+            self.state.save(outgoing=dict(id=self.transfer_id, name=self.name, size=self.file_size,
+                checksum=self.checksum, snapshot=self.snapshot.name, expires=self.deadline))
 
     def start(self, path):
         if self.busy or self.finished.is_set():
@@ -72,6 +99,8 @@ class FileSender:
         if not self.busy and self.snapshot:
             self.snapshot.unlink(missing_ok=True)
             self.snapshot = None
+            if self.state:
+                self.state.clear()
             self.result = "cancelled"
             self.report("File sending cancelled")
         self.cancelled.set()
@@ -95,6 +124,9 @@ class FileSender:
         now = self.progress_clock()
         if force or now >= self.next_progress_report:
             self.next_progress_report = now + .25
+            if self.state and self.snapshot:
+                self.deadline = time.time() + RESUME_TTL_SECONDS
+                self.checkpoint()
             self.report('Sending file to phone')
 
     def transmit(self, message):
@@ -145,6 +177,10 @@ class FileSender:
                 checksum = digest.hexdigest()
                 name = ''.join(c for c in Path(path).name if c.isprintable())[:100] or 'document'
                 self.snapshot, self.checksum, self.name = temporary, checksum, name
+                with temporary.open('rb') as durable:
+                    os.fsync(durable.fileno())
+                self.deadline = time.time() + RESUME_TTL_SECONDS
+                self.checkpoint()
             else:
                 checksum, name = self.checksum, self.name
                 if temporary is None or temporary.is_symlink() or temporary.stat().st_size != self.file_size:
@@ -210,6 +246,16 @@ class FileSender:
                     pass
             if not paused:
                 self.snapshot = None
+                if self.state:
+                    self.state.clear()
+            elif self.state:
+                try:
+                    self.deadline = time.time() + RESUME_TTL_SECONDS
+                    self.checkpoint()
+                except OSError:
+                    paused = False
+                    temporary.unlink(missing_ok=True)
+                    self.snapshot = None
             self.paused_at = time.monotonic() if paused else 0
             self.result = 'paused' if paused else ('completed' if complete else ('cancelled' if self.cancelled.is_set() else 'failed'))
             self.busy = False

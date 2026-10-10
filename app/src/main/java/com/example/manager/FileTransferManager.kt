@@ -39,14 +39,28 @@ class FileTransferManager(
     private val resumeWindowMs: Long = TRANSFER_RESUME_WINDOW_MS,
     private val progressClock: () -> Long = System::nanoTime
 ) {
-    private val spool = File(context.cacheDir, "outgoing_transfers")
-    private val initialized = scope.async(Dispatchers.IO) {
+    private val spool = File(context.filesDir, "outgoing_transfers")
+    private val checkpoint = TransferCheckpoint(File(context.filesDir, "transfer_state/outgoing.json"))
+    private val initialized = scope.async(Dispatchers.IO, start = CoroutineStart.LAZY) {
         spool.mkdirs()
-        spool.listFiles()?.filter { it.name.startsWith("transfer-") && it.name.endsWith(".part") }?.forEach { it.delete() }
         fileTransferDao.failInterruptedOutgoing()
+        val restored = runCatching {
+            val saved = checkpoint.load()
+            val expires = saved.checkpointExpiry(resumeWindowMs)
+            val destination = saved.checkpointTarget()
+            require(retain(destination))
+            val item = saved.checkpointItem(TransferDirection.OUTGOING)
+            val snapshot = checkpointFile(spool, saved.getString("snapshot"), "transfer-")
+            require(snapshot.length() == item.fileSize && checkpointDigest(snapshot).checkpointHash() == item.sha256Checksum)
+            Paused(item, destination, snapshot, System.nanoTime() - (resumeWindowMs - (expires - System.currentTimeMillis())) * 1_000_000, expires)
+        }.getOrNull()
+        if (restored == null) checkpoint.clear()
+        spool.listFiles()?.filter { it.name.startsWith("transfer-") && it.name.endsWith(".part") && it != restored?.snapshot }?.forEach { it.delete() }
         fileTransferDao.getAllTransfers().first().filter { it.direction == TransferDirection.OUTGOING && it.status == TransferStatus.PAUSED }.forEach {
-            fileTransferDao.insertOrUpdate(it.copy(status = TransferStatus.FAILED, errorMessage = "App restarted. Choose the file again."))
+            if (it.transferId != restored?.item?.transferId) fileTransferDao.insertOrUpdate(it.copy(status = TransferStatus.FAILED, errorMessage = "Saved transfer expired or is unavailable. Choose the file again."))
         }
+        paused = restored
+        if (restored != null) fileTransferDao.insertOrUpdate(restored.item.copy(status = TransferStatus.PAUSED, errorMessage = "Reconnect the original paired Mac to resume."))
     }
     private val occupied = AtomicBoolean(false)
     private val acknowledgements = ConcurrentHashMap<String, Channel<ProtocolMessage.FileAck>>()
@@ -61,7 +75,11 @@ class FileTransferManager(
     }
     @Volatile private var expectedPeer: String? = null
 
-    private data class Paused(val item: FileTransferItem, val destination: FileTransferTarget, val snapshot: File, val since: Long = System.nanoTime())
+    private data class Paused(val item: FileTransferItem, val destination: FileTransferTarget, val snapshot: File, val since: Long = System.nanoTime(), val expires: Long)
+    private fun saveCheckpoint(value: Paused) {
+        checkpoint.save(value.item.checkpointItem().put("peer", value.destination.checkpointPeer())
+            .put("snapshot", value.snapshot.name).put("expires", value.expires))
+    }
     private val pauseSignals = Channel<Unit>(Channel.CONFLATED)
     @Volatile private var paused: Paused? = null
         set(value) {
@@ -72,6 +90,7 @@ class FileTransferManager(
     init {
         scope.launch(Dispatchers.IO) {
             try {
+                initialized.await()
                 while (isActive) {
                     pauseSignals.receive()
                     while (paused != null) {
@@ -81,6 +100,7 @@ class FileTransferManager(
                         if ((System.nanoTime() - value.since) / 1_000_000 > resumeWindowMs || !retain(value.destination)) {
                             if (paused === value && !occupied.get()) {
                                 paused = null
+                                checkpoint.clear()
                                 value.snapshot.delete()
                                 fileTransferDao.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = "Paused transfer expired or File sharing permission changed."))
                             }
@@ -92,8 +112,8 @@ class FileTransferManager(
                     val value = paused
                     paused = null
                     if (value != null) {
-                        value.snapshot.delete()
-                        fileTransferDao.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = "App stopped. Choose the file again."))
+                        if (retain(value.destination)) saveCheckpoint(value)
+                        else { checkpoint.clear(); value.snapshot.delete() }
                     }
                 }
             }
@@ -103,6 +123,7 @@ class FileTransferManager(
     fun sendFile(uri: Uri): Boolean = start(uri, null)
 
     suspend fun resumeTransfer(id: String): Boolean {
+        initialized.await()
         val value = paused?.takeIf { it.item.transferId == id } ?: return false
         if ((System.nanoTime() - value.since) / 1_000_000 > resumeWindowMs) return false
         val current = target() ?: return false
@@ -128,6 +149,7 @@ class FileTransferManager(
             var offered = false
             try {
                 initialized.await()
+                insist(resumed != null || paused == null) { "Resume or cancel the paused transfer first." }
                 fileTransferDao.insertOrUpdate(item)
                 destination = target() ?: throw TransferFailure("Connect to your Mac and enable File sharing in Devices.")
                 expectedPeer = destination.device.id
@@ -186,6 +208,8 @@ class FileTransferManager(
                 val checksum = item.sha256Checksum
                 item = item.copy(status = TransferStatus.TRANSFERRING, errorMessage = null)
                 fileTransferDao.insertOrUpdate(item)
+                snapshot!!.inputStream().use { it.fd.sync() }
+                saveCheckpoint(Paused(item, destination, snapshot, expires = System.currentTimeMillis() + resumeWindowMs))
                 if (!send(ProtocolMessage.FileInit(id, name, count, checksum, resume = resumed != null), destination)) throw TransferInterrupted()
                 offered = true
                 suspend fun nextAck(expectedBytes: Long, status: String) {
@@ -221,20 +245,27 @@ class FileTransferManager(
                         offset += bytes.size
                         nextAck(offset, if (offset == count) "COMPLETED" else "IN_PROGRESS")
                         item = item.copy(transferredBytes = offset)
-                        if (offset < count && updates.due()) fileTransferDao.insertOrUpdate(item)
+                        if (offset < count && updates.due()) {
+                            fileTransferDao.insertOrUpdate(item)
+                            saveCheckpoint(Paused(item, destination, snapshot, expires = System.currentTimeMillis() + resumeWindowMs))
+                        }
                     }
                 }
                 item = item.copy(status = TransferStatus.COMPLETED, transferredBytes = count, calculatedChecksum = checksum)
                 fileTransferDao.insertOrUpdate(item)
                 complete = true
             } catch (error: Exception) {
-                keep = snapshot != null && item.sha256Checksum.isNotEmpty() && destination != null &&
-                    (error is TimeoutCancellationException || error is TransferInterrupted) && scope.isActive && retain(destination)
-                if (keep) paused = Paused(item, destination!!, snapshot!!)
+                keep = withContext(NonCancellable) { snapshot != null && item.sha256Checksum.isNotEmpty() && destination != null &&
+                    (error is TimeoutCancellationException || error is TransferInterrupted || error is CancellationException && !scope.isActive) && retain(destination) }
+                if (keep) {
+                    val value = Paused(item.copy(status = TransferStatus.PAUSED), destination!!, snapshot!!, expires = System.currentTimeMillis() + resumeWindowMs)
+                    keep = withContext(NonCancellable + Dispatchers.IO) { runCatching { saveCheckpoint(value) }.isSuccess }
+                    if (keep) paused = value
+                }
                 val message = when (error) {
                     is TransferInterrupted -> "Connection interrupted. Reconnect the same Mac and resume within 10 minutes."
                     is TimeoutCancellationException -> "Transfer paused. Reconnect the same Mac and resume within 10 minutes."
-                    is CancellationException -> "Cancelled. Any unverified partial file is removed."
+                    is CancellationException -> if (keep) "Transfer paused. Reconnect the original Mac to resume after reopening." else "Cancelled. Any unverified partial file is removed."
                     is SecurityException -> "Document access was revoked. Choose the file again."
                     is TransferFailure -> error.explanation
                     else -> "Could not read or send this file. Check the connection, free space and document access."
@@ -244,13 +275,8 @@ class FileTransferManager(
                 }
             } finally {
                 withContext(NonCancellable + Dispatchers.IO) {
-                    if (keep && !scope.isActive) {
-                        keep = false
-                        paused = null
-                        fileTransferDao.insertOrUpdate(item.copy(status = TransferStatus.FAILED, errorMessage = "App stopped. Choose the file again."))
-                    }
                     if (!complete && !keep && offered && destination != null) runCatching { send(ProtocolMessage.FileCancel(id), destination) }
-                    if (!keep) { snapshot?.delete(); if (paused === resumed) paused = null }
+                    if (!keep) { snapshot?.delete(); if (paused == null || paused === resumed) checkpoint.clear(); if (paused === resumed) paused = null }
                     acknowledgements.remove(id)?.close()
                     expectedPeer = null
                     activeId = null
@@ -266,12 +292,17 @@ class FileTransferManager(
     fun cancelTransfer(transferId: String) {
         if (activeId == transferId) activeJob?.cancel()
         val value = paused?.takeIf { it.item.transferId == transferId } ?: return
+        if (!occupied.compareAndSet(false, true)) return
+        busyState.value = true
         paused = null
         scope.launch(Dispatchers.IO) {
-            value.snapshot.delete()
-            val current = target()
-            if (current != null && current.device.id == value.destination.device.id && current.device.fingerprint == value.destination.device.fingerprint) send(ProtocolMessage.FileCancel(transferId), current)
-            fileTransferDao.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = "Cancelled."))
+            try {
+                checkpoint.clear()
+                value.snapshot.delete()
+                val current = target()
+                if (current != null && current.device.id == value.destination.device.id && current.device.fingerprint == value.destination.device.fingerprint) send(ProtocolMessage.FileCancel(transferId), current)
+                fileTransferDao.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = "Cancelled."))
+            } finally { occupied.set(false); busyState.value = false }
         }
     }
 }

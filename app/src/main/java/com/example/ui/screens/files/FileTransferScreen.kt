@@ -110,7 +110,7 @@ fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevice
         SharingHelp("How file sharing works") {
             Text("Phone → Mac: turn on Allow File Receiving in the Mac menu, then choose a file here. Find verified files in Show Received Files.", color = Slate400)
             Text("Mac → Phone: choose Send File to Phone… in the Mac menu, then Save As… on the received file below.", color = Slate400)
-            Text("Interrupted? Reconnect the same device and resume within 10 minutes. Keep both apps running.", color = Slate400)
+            Text("Interrupted or reopened the app? Reconnect the same device and resume within 10 minutes.", color = Slate400)
         }
     }
 }

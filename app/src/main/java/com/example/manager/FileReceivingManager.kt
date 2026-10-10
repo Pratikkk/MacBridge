@@ -15,6 +15,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
+import org.json.JSONObject
+import org.json.JSONArray
 
 /** Verified files stay private until the user chooses a Save As destination. */
 class FileReceivingManager(
@@ -29,6 +31,8 @@ class FileReceivingManager(
     private val progressClock: () -> Long = System::nanoTime
 ) {
     private val folder = File(context.filesDir, "received_files")
+    private val checkpoint = TransferCheckpoint(File(context.filesDir, "transfer_state/incoming.json"))
+    private val checkpointUpdates = ProgressUpdates(progressClock)
     private val mutex = Mutex()
     private data class Incoming(val id: String, var source: FileTransferTarget, var item: FileTransferItem,
         val temporary: File, val output: FileOutputStream, val digest: MessageDigest,
@@ -42,16 +46,76 @@ class FileReceivingManager(
     private var pausedAt: Long? = null
     private val cancelled = LinkedHashMap<String, FileTransferTarget>()
     private val receipts = LinkedHashMap<String, Pair<FileTransferTarget, FileTransferItem>>()
+    private val receiptDetails = LinkedHashMap<String, JSONObject>()
+    private var deadline = 0L
+
+    private fun saveCheckpoint(force: Boolean = true) {
+        if (!force && !checkpointUpdates.due()) return
+        var incoming: JSONObject? = null
+        active?.let { value ->
+            value.output.flush()
+            value.output.fd.sync()
+            val prefix = try { (value.digest.clone() as MessageDigest).checkpointHash() }
+                catch (_: CloneNotSupportedException) { checkpointDigest(value.temporary, value.item.transferredBytes).checkpointHash() }
+            incoming = value.item.checkpointItem().put("peer", value.source.checkpointPeer())
+                .put("temporary", value.temporary.name).put("prefix", prefix).put("expires", deadline)
+        }
+        receiptDetails.entries.removeAll { it.value.getLong("expires") <= System.currentTimeMillis() }
+        receipts.keys.retainAll(receiptDetails.keys)
+        while (receiptDetails.size > 64) { val id = receiptDetails.keys.first(); receiptDetails.remove(id); receipts.remove(id) }
+        checkpoint.save(JSONObject().put("incoming", incoming).put("receipts", JSONArray(receiptDetails.values.toList())))
+    }
     private fun samePeer(a: FileTransferTarget, b: FileTransferTarget) = a.device.id == b.device.id && a.device.fingerprint == b.device.fingerprint
     private fun sameSession(a: FileTransferTarget?, b: FileTransferTarget): Boolean =
         a != null && a.device.id == b.device.id && a.device.fingerprint == b.device.fingerprint && a.session == b.session
-    private val initialized = scope.async(Dispatchers.IO) {
+    private val initialized = scope.async(Dispatchers.IO, start = CoroutineStart.LAZY) {
         check(folder.mkdirs() || folder.isDirectory)
-        folder.listFiles()?.filter { it.name.startsWith(".incoming-") }?.forEach { it.delete() }
         history.failInterruptedIncoming()
-        history.getAllTransfers().first().filter { it.direction == TransferDirection.INCOMING && it.status == TransferStatus.PAUSED }.forEach {
-            history.insertOrUpdate(it.copy(status = TransferStatus.FAILED, errorMessage = "App restarted. Ask your Mac to send the file again."))
+        val saved = checkpoint.load()
+        val storedReceipts = saved.optJSONArray("receipts") ?: JSONArray()
+        for (index in 0 until minOf(storedReceipts.length(), 64)) {
+            runCatching {
+                val record = storedReceipts.getJSONObject(index)
+                record.checkpointExpiry(resumeWindowMs)
+                val peer = record.checkpointTarget()
+                require(retain(peer))
+                var item = record.checkpointItem(TransferDirection.INCOMING)
+                require(item.transferredBytes == item.fileSize)
+                val name = record.getString("destination")
+                require(name.matches(Regex("[a-f0-9-]{36}\\.verified")))
+                val destination = File(folder, name)
+                val source = if (destination.isFile) checkpointFile(folder, name, "") else checkpointFile(folder, record.getString("temporary"), ".incoming-")
+                require(source.length() == item.fileSize && (source == destination || checkpointDigest(source).checkpointHash() == item.sha256Checksum))
+                if (source != destination) check(source.renameTo(destination))
+                item = item.copy(status = TransferStatus.COMPLETED, filePath = destination.absolutePath, calculatedChecksum = item.sha256Checksum)
+                history.insertOrUpdate(item)
+                val id = item.transferId.removePrefix("incoming-")
+                receipts[id] = peer to item
+                receiptDetails[id] = record.put("temporary", JSONObject.NULL)
+            }
         }
+        runCatching {
+            val record = saved.getJSONObject("incoming")
+            val expires = record.checkpointExpiry(resumeWindowMs)
+            val peer = record.checkpointTarget()
+            require(retain(peer))
+            val item = record.checkpointItem(TransferDirection.INCOMING)
+            require(item.transferredBytes < item.fileSize && item.transferredBytes % FILE_CHUNK_SIZE == 0L)
+            val temporary = checkpointFile(folder, record.getString("temporary"), ".incoming-")
+            val digest = checkpointDigest(temporary, item.transferredBytes)
+            require((digest.clone() as MessageDigest).checkpointHash() == record.getString("prefix"))
+            java.io.RandomAccessFile(temporary, "rw").use { it.setLength(item.transferredBytes) }
+            active = Incoming(item.transferId.removePrefix("incoming-"), peer, item, temporary, FileOutputStream(temporary, true), digest,
+                ProgressUpdates(progressClock), index = (item.transferredBytes / FILE_CHUNK_SIZE).toInt())
+            deadline = expires
+            pausedAt = System.nanoTime() - (resumeWindowMs - (expires - System.currentTimeMillis())) * 1_000_000
+            history.insertOrUpdate(item.copy(status = TransferStatus.PAUSED))
+        }
+        folder.listFiles()?.filter { it.name.startsWith(".incoming-") && it != active?.temporary }?.forEach { it.delete() }
+        history.getAllTransfers().first().filter { it.direction == TransferDirection.INCOMING && it.status == TransferStatus.PAUSED }.forEach {
+            if (it.transferId != active?.item?.transferId) history.insertOrUpdate(it.copy(status = TransferStatus.FAILED, errorMessage = "Saved transfer expired or is unavailable. Ask your Mac to send it again."))
+        }
+        saveCheckpoint()
     }
     init {
         scope.launch(Dispatchers.IO) {
@@ -71,14 +135,26 @@ class FileReceivingManager(
                             } else if (pausedAt == null && (!sameSession(target(), value.source) || (System.nanoTime() - value.activity) / 1_000_000 > idleTimeoutMs)) {
                                 value.output.flush()
                                 pausedAt = System.nanoTime()
+                                deadline = System.currentTimeMillis() + resumeWindowMs
                                 value.item = value.item.copy(status = TransferStatus.PAUSED, errorMessage = null)
                                 history.insertOrUpdate(value.item)
+                                saveCheckpoint()
                             }
                         }
                     }
                 }
             } finally {
-                withContext(NonCancellable + Dispatchers.IO) { mutex.withLock { abort("Connection stopped. Send the file again.") } }
+                withContext(NonCancellable + Dispatchers.IO) { mutex.withLock {
+                    val value = active
+                    if (value != null && retain(value.source)) {
+                        value.item = value.item.copy(status = TransferStatus.PAUSED)
+                        if (pausedAt == null) deadline = System.currentTimeMillis() + resumeWindowMs
+                        saveCheckpoint()
+                        history.insertOrUpdate(value.item)
+                        value.output.close()
+                        active = null
+                    } else abort("Connection stopped. Send the file again.")
+                } }
             }
         }
     }
@@ -104,8 +180,11 @@ class FileReceivingManager(
             try {
                 if (message is ProtocolMessage.FileCancel) {
                     cancelled[id] = source
+                    receipts.remove(id)
+                    receiptDetails.remove(id)
                     if (cancelled.size > 64) cancelled.remove(cancelled.keys.first())
                     if (active?.id == id && active?.let { samePeer(it.source, source) } == true) abort("Cancelled by your Mac.")
+                    saveCheckpoint()
                     acknowledge("CANCELLED")
                     return@withLock
                 }
@@ -113,7 +192,9 @@ class FileReceivingManager(
                     if (message.resume) {
                         if (cancelled[id]?.let { samePeer(it, source) } == true) { acknowledge("REJECTED"); return@withLock }
                         val receipt = receipts[id]
-                        if (receipt != null && samePeer(receipt.first, source) && receipt.second.fileSize == message.fileSize && receipt.second.fileName == safeName(message.fileName) && receipt.second.sha256Checksum == message.sha256Checksum && message.chunkSize == FILE_CHUNK_SIZE) {
+                        if (receipt != null && receiptDetails[id]?.optLong("expires", 0)?.let { it > System.currentTimeMillis() } == true && samePeer(receipt.first, source) && receipt.second.fileSize == message.fileSize && receipt.second.fileName == safeName(message.fileName) && receipt.second.sha256Checksum == message.sha256Checksum && message.chunkSize == FILE_CHUNK_SIZE) {
+                            val verified = checkpointFile(folder, File(requireNotNull(receipt.second.filePath)).name, "")
+                            require(verified.length() == receipt.second.fileSize && checkpointDigest(verified).checkpointHash() == receipt.second.sha256Checksum)
                             acknowledge("COMPLETED", receipt.second.fileSize, receipt.second.sha256Checksum)
                             return@withLock
                         }
@@ -162,7 +243,9 @@ class FileReceivingManager(
                         sha256Checksum = message.sha256Checksum)
                     val output = try { FileOutputStream(temporary) } catch (error: Exception) { temporary.delete(); throw error }
                     active = Incoming(id, source, item, temporary, output, MessageDigest.getInstance("SHA-256"), ProgressUpdates(progressClock))
+                    deadline = System.currentTimeMillis() + resumeWindowMs
                     history.insertOrUpdate(item)
+                    saveCheckpoint()
                     if (item.fileSize == 0L) finish() else acknowledge("READY")
                     return@withLock
                 }
@@ -182,9 +265,10 @@ class FileReceivingManager(
                 value.index++
                 value.activity = System.nanoTime()
                 value.item = value.item.copy(transferredBytes = value.item.transferredBytes + length)
+                deadline = System.currentTimeMillis() + resumeWindowMs
                 if (value.item.transferredBytes < value.item.fileSize && value.updates.due()) history.insertOrUpdate(value.item)
                 if (value.item.transferredBytes == value.item.fileSize) finish()
-                else acknowledge("IN_PROGRESS", value.item.transferredBytes)
+                else { saveCheckpoint(force = false); acknowledge("IN_PROGRESS", value.item.transferredBytes) }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 abort("Could not verify or store the file. Ask your Mac to send it again.")
@@ -209,12 +293,18 @@ class FileReceivingManager(
         value.output.fd.sync()
         value.output.close()
         val destination = File(folder, UUID.randomUUID().toString() + ".verified")
+        receiptDetails[value.id] = value.item.checkpointItem().put("peer", value.source.checkpointPeer())
+            .put("destination", destination.name).put("temporary", value.temporary.name).put("expires", System.currentTimeMillis() + resumeWindowMs)
+        active = null
+        saveCheckpoint()
         check(value.temporary.renameTo(destination))
         try {
             history.insertOrUpdate(value.item.copy(status = TransferStatus.COMPLETED,
                 calculatedChecksum = hash, filePath = destination.absolutePath))
         } catch (error: Exception) { destination.delete(); throw error }
-        receipts[value.id] = value.source to value.item
+        receipts[value.id] = value.source to value.item.copy(status = TransferStatus.COMPLETED, calculatedChecksum = hash, filePath = destination.absolutePath)
+        receiptDetails[value.id]?.put("temporary", JSONObject.NULL)
+        saveCheckpoint()
         if (receipts.size > 64) receipts.remove(receipts.keys.first())
         active = null
         pausedAt = null
@@ -227,6 +317,7 @@ class FileReceivingManager(
         pausedAt = null
         runCatching { value.output.close() }
         value.temporary.delete()
+        saveCheckpoint()
         history.insertOrUpdate(value.item.copy(status = TransferStatus.FAILED, errorMessage = reason))
     }
 

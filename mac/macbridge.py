@@ -20,6 +20,7 @@ import uuid
 
 from file_receiver import FileReceiver, RESUME_TTL_SECONDS
 from file_sender import FileSender
+from transfer_state import TransferState
 
 MAX_FRAME = 1024 * 1024
 
@@ -112,15 +113,39 @@ class Companion:
         self.sender = None
         self.sender_peer = None
         self.peer_receivers = {}
+        self.transfer_state = self.directory / 'TransferState'
+        sender_path = self.transfer_state / 'sender.json'
+        try:
+            if not sender_path.is_symlink() and sender_path.stat().st_size <= 128 * 1024:
+                identity = json.loads(sender_path.read_text()).get('identity')
+                if isinstance(identity, list) and len(identity) == 4 and identity[:2] == [self.device_id, self.pin] and self.peers.get(identity[2], {}).get('publicKey') == identity[3]:
+                    self.sender_peer = tuple(identity[2:])
+                    self.sender = FileSender(self.directory / 'OutgoingFiles', lambda _: (_ for _ in ()).throw(OSError('Reconnect first')), self.report,
+                        state=TransferState(sender_path, identity))
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        for peer_id, peer in self.peers.items():
+            identity = (peer_id, peer.get('publicKey'))
+            state = self.receiver_state(identity)
+            if self.files and state.path.exists() and len(self.peer_receivers) < 4:
+                self.peer_receivers[identity] = FileReceiver(self.directory / 'ReceivedFiles', state=state)
+        allowed_states = {r.state.path for r in self.peer_receivers.values()}
+        if self.transfer_state.exists() and not self.transfer_state.is_symlink():
+            for stale in self.transfer_state.glob('receiver-*.json'):
+                if stale not in allowed_states:
+                    stale.unlink(missing_ok=True)
+        retained = {r.active['temporary'] for r in self.peer_receivers.values() if r.active}
+        if self.sender and self.sender.snapshot:
+            retained.add(self.sender.snapshot)
         outgoing = self.directory / 'OutgoingFiles'
         if outgoing.exists() and not outgoing.is_symlink():
             for partial in outgoing.glob('.outgoing-*'):
-                if partial.is_file() or partial.is_symlink():
+                if partial not in retained and (partial.is_file() or partial.is_symlink()):
                     partial.unlink()
         received = self.directory / 'ReceivedFiles'
         if received.exists() and not received.is_symlink():
             for partial in received.glob('.incoming-*'):
-                if partial.is_file() or partial.is_symlink():
+                if partial not in retained and (partial.is_file() or partial.is_symlink()):
                     partial.unlink()
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
@@ -140,6 +165,11 @@ class Companion:
         self.port = self.listener.getsockname()[1]
         self.slots = threading.BoundedSemaphore(4)
         self.connections = set()
+
+    def receiver_state(self, identity):
+        binding = [self.device_id, self.pin, *identity]
+        name = hashlib.sha256(json.dumps(binding).encode()).hexdigest()
+        return TransferState(self.transfer_state / ('receiver-' + name + '.json'), binding)
 
     def rotate_code(self):
         with self.lock:
@@ -232,7 +262,7 @@ class Companion:
                 self.files = enabled
                 if not enabled:
                     for receiver in set(self.peer_receivers.values()) | self.receivers:
-                        receiver.abort()
+                        receiver.discard()
             self.report('File receiving enabled' if enabled else 'File receiving paused')
         elif action == 'disconnect':
             self.disconnect_phone()
@@ -326,8 +356,8 @@ class Companion:
                     if receiver is None:
                         if len(self.peer_receivers) >= 4:
                             _, old = self.peer_receivers.popitem()
-                            old.abort()
-                        receiver = FileReceiver(self.directory / "ReceivedFiles")
+                            old.discard()
+                        receiver = FileReceiver(self.directory / "ReceivedFiles", state=self.receiver_state(identity))
                         self.peer_receivers[identity] = receiver
                     self.receivers.add(receiver)
                 secure.settimeout(45)
@@ -377,7 +407,7 @@ class Companion:
                     self.active_socket = self.active_stream = self.active_id = None
                     self.connection_id = ""
                     if self.sender:
-                        self.sender.cancel() if self.stop_event.is_set() else self.sender.interrupt()
+                        self.sender.interrupt()
                 self.connections.discard(raw)
                 self.connections.discard(secure)
             if secure:
@@ -423,7 +453,8 @@ class Companion:
             if self.sender and self.sender.result == 'paused':
                 raise ValueError('Resume or cancel the paused transfer first')
             self.sender_peer = (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))
-            self.sender = FileSender(self.directory / 'OutgoingFiles', send, self.report)
+            self.sender = FileSender(self.directory / 'OutgoingFiles', send, self.report,
+                state=TransferState(self.transfer_state / 'sender.json', [self.device_id, self.pin, *self.sender_peer]))
             self.sender.start(path)
         self.emit_state()
 
@@ -462,7 +493,7 @@ class Companion:
         with self.lock:
             for identity in list(self.peer_receivers):
                 if identity[0] == peer_id:
-                    self.peer_receivers.pop(identity).abort()
+                    self.peer_receivers.pop(identity).discard()
             if self.sender_peer and self.sender_peer[0] == peer_id and self.sender:
                 self.sender.cancel()
             if peer_id in self.peers:
@@ -483,15 +514,17 @@ class Companion:
         self.listener.close()
         with self.lock:
             if self.sender:
-                self.sender.cancel()
+                self.sender.interrupt()
             for receiver in set(self.peer_receivers.values()) | self.receivers:
-                receiver.abort()
+                receiver.suspend() if receiver.state and self.files else receiver.abort()
             for connection in self.connections:
                 try:
                     connection.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
                 connection.close()
+        if self.sender and self.sender.busy:
+            self.sender.finished.wait(5)
 
 
 def main():

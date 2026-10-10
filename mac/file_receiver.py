@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import uuid
 import time
+from transfer_state import private_file, file_digest, metadata
 
 CHUNK_SIZE = 65536
 RESUME_TTL_SECONDS = 600
@@ -15,18 +16,94 @@ MAX_FILE_SIZE = 100 * 1024 * 1024
 
 
 class FileReceiver:
-    def __init__(self, directory):
+    def __init__(self, directory, state=None):
         self.directory = Path(directory)
         self.active = None
         self.last_saved = None
         self.completed = {}
         self.cancelled = set()
         self.paused_at = None
+        self.state = state
+        self.deadline = 0
+        self.next_checkpoint = 0
+        self.receipt_files = {}
+        if state:
+            self.restore()
+
+    def restore(self):
+        saved = self.state.load()
+        stored_receipts = saved.get('receipts', [])
+        for receipt in (stored_receipts if isinstance(stored_receipts, list) else [])[:64]:
+            try:
+                metadata(receipt, MAX_FILE_SIZE)
+                if not time.time() < receipt['expires'] <= time.time() + RESUME_TTL_SECONDS + 1:
+                    continue
+                destination = self.directory / receipt['destination']
+                if destination.name != receipt['destination'] or destination.is_symlink() or not destination.name.startswith('verified-'):
+                    continue
+                path = destination if destination.is_file() else private_file(self.directory, receipt['temporary'], '.incoming-')
+                if path.stat().st_size != receipt['size'] or (path != destination and file_digest(path).hexdigest() != receipt['checksum']):
+                    continue
+                if path != destination:
+                    path.replace(destination)
+                self.completed[receipt['id']] = (receipt['size'], receipt['name'], receipt['checksum'])
+                self.receipt_files[receipt['id']] = dict(receipt, temporary=None)
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+        value = saved.get('incoming')
+        try:
+            metadata(value, MAX_FILE_SIZE)
+            if value['id'] in self.completed or not time.time() < value['expires'] <= time.time() + RESUME_TTL_SECONDS + 1:
+                raise ValueError('Expired checkpoint')
+            offset = value['offset']
+            if type(offset) is not int or not 0 <= offset < value['size'] or offset % CHUNK_SIZE:
+                raise ValueError('Invalid checkpoint offset')
+            temporary = private_file(self.directory, value['temporary'], '.incoming-')
+            digest = file_digest(temporary, offset)
+            if digest.hexdigest() != value['prefix']:
+                raise ValueError('Corrupt partial')
+            destination = self.directory / value['destination']
+            if destination.name != value['destination'] or not destination.name.startswith('verified-') or destination.exists():
+                raise ValueError('Invalid destination')
+            stream = temporary.open('r+b')
+            stream.truncate(offset)
+            stream.seek(offset)
+            self.active = dict(value, index=offset // CHUNK_SIZE, temporary=temporary, destination=destination, stream=stream, digest=digest)
+            self.deadline = value['expires']
+            self.paused_at = time.monotonic() - (RESUME_TTL_SECONDS - (self.deadline - time.time()))
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        self.checkpoint()
+
+    def checkpoint(self, force=True):
+        if not self.state or (not force and time.monotonic() < self.next_checkpoint):
+            return
+        self.next_checkpoint = time.monotonic() + .25
+        incoming = None
+        if self.active:
+            value = self.active
+            value['stream'].flush()
+            os.fsync(value['stream'].fileno())
+            incoming = {key: value[key] for key in ('id', 'name', 'size', 'checksum', 'offset')}
+            incoming.update(temporary=value['temporary'].name, destination=value['destination'].name,
+                prefix=value['digest'].copy().hexdigest(), expires=self.deadline)
+        self.receipt_files = dict(list((key, value) for key, value in self.receipt_files.items() if value['expires'] > time.time())[-64:])
+        self.completed = {key: value for key, value in self.completed.items() if not self.state or key in self.receipt_files}
+        self.state.save(incoming=incoming, receipts=list(self.receipt_files.values())[-64:])
+
+    def suspend(self):
+        if self.active:
+            self.pause()
+            self.active['stream'].close()
+            self.active = None
 
     def pause(self):
         if self.active:
             self.active["stream"].flush()
-            self.paused_at = time.monotonic()
+            if self.paused_at is None:
+                self.paused_at = time.monotonic()
+                self.deadline = time.time() + RESUME_TTL_SECONDS
+            self.checkpoint()
 
     def abort(self):
         self.paused_at = None
@@ -40,6 +117,14 @@ class FileReceiver:
                 value['temporary'].unlink(missing_ok=True)
             except OSError:
                 pass
+        self.checkpoint()
+
+    def discard(self):
+        self.abort()
+        self.completed.clear()
+        self.receipt_files.clear()
+        if self.state:
+            self.state.clear()
 
     def ack(self, transfer_id, status, count=0, checksum=None):
         result = dict(type='FILE_ACK', transferId=transfer_id, status=status, receivedBytes=count)
@@ -60,8 +145,11 @@ class FileReceiver:
                 if len(self.cancelled) >= 64:
                     self.cancelled.pop()
                 self.cancelled.add(transfer_id)
+                self.completed.pop(transfer_id, None)
+                self.receipt_files.pop(transfer_id, None)
                 if self.active and self.active['id'] == transfer_id:
                     self.abort()
+                self.checkpoint()
                 return self.ack(transfer_id, 'CANCELLED')
             if kind == 'FILE_INIT':
                 if self.paused_at is not None and time.monotonic() - self.paused_at > RESUME_TTL_SECONDS:
@@ -70,7 +158,17 @@ class FileReceiver:
                     if transfer_id in self.cancelled:
                         return self.ack(transfer_id, 'REJECTED')
                     receipt = self.completed.get(transfer_id)
+                    if self.state and self.receipt_files.get(transfer_id, {}).get('expires', 0) <= time.time():
+                        receipt = None
                     if message.get('chunkSize') == CHUNK_SIZE and receipt and receipt[:3] == (message.get('fileSize'), message.get('fileName'), message.get('sha256Checksum')):
+                        if self.state:
+                            record = self.receipt_files[transfer_id]
+                            path = private_file(self.directory, record['destination'], 'verified-')
+                            if path.stat().st_size != receipt[0] or file_digest(path).hexdigest() != receipt[2]:
+                                self.completed.pop(transfer_id, None)
+                                self.receipt_files.pop(transfer_id, None)
+                                self.checkpoint()
+                                return self.ack(transfer_id, 'REJECTED')
                         return self.ack(transfer_id, 'COMPLETED', receipt[0], receipt[2])
                     if self.active and self.active['id'] == transfer_id:
                         value = self.active
@@ -110,7 +208,9 @@ class FileReceiver:
                 os.chmod(stream.name, 0o600)
                 self.active = dict(id=transfer_id, name=name, size=size, checksum=digest, offset=0, index=0,
                     stream=stream, temporary=Path(stream.name), digest=hashlib.sha256(),
-                    destination=self.directory / (str(uuid.uuid4()) + '-' + safe))
+                    destination=self.directory / ('verified-' + str(uuid.uuid4()) + '-' + safe))
+                self.deadline = time.time() + RESUME_TTL_SECONDS
+                self.checkpoint()
                 if size == 0:
                     return self.finish()
                 return self.ack(transfer_id, 'READY')
@@ -134,6 +234,8 @@ class FileReceiver:
             value['index'] += 1
             if value['offset'] == value['size']:
                 return self.finish()
+            self.deadline = time.time() + RESUME_TTL_SECONDS
+            self.checkpoint(force=False)
             return self.ack(transfer_id, 'IN_PROGRESS', value['offset'])
         except (ValueError, OSError, TypeError):
             self.abort()
@@ -148,8 +250,15 @@ class FileReceiver:
         value['stream'].flush()
         os.fsync(value['stream'].fileno())
         value['stream'].close()
+        self.receipt_files[value['id']] = dict(id=value['id'], size=value['size'], name=value['name'], checksum=digest,
+            destination=value['destination'].name, temporary=value['temporary'].name, expires=time.time() + RESUME_TTL_SECONDS)
+        # Journal the verified publication before rename, so restart recovers a lost final ACK.
+        self.active = None
+        self.checkpoint()
         value['temporary'].replace(value['destination'])
         self.completed[value['id']] = (value['size'], value['name'], digest)
+        self.receipt_files[value['id']]['temporary'] = None
+        self.checkpoint()
         if len(self.completed) > 64:
             del self.completed[next(iter(self.completed))]
         self.last_saved = value['destination']

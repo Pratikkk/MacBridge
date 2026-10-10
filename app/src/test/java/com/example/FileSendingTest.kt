@@ -104,11 +104,11 @@ class FileSendingTest {
             if (cancel || response in listOf("reject", "bad-hash")) assertTrue(cancelled)
             if (paused) {
                 assertFalse(cancelled)
-                assertTrue(File(context.cacheDir, "outgoing_transfers").listFiles().orEmpty().any { it.name.endsWith(".part") })
+                assertTrue(File(context.filesDir, "outgoing_transfers").listFiles().orEmpty().any { it.name.endsWith(".part") })
                 manager.cancelTransfer(item.transferId)
                 withTimeout(3000) { while (history.values[item.transferId]!!.status == TransferStatus.PAUSED) delay(10) }
             }
-            assertFalse(File(context.cacheDir, "outgoing_transfers").listFiles().orEmpty().any { it.name.endsWith(".part") })
+            assertFalse(File(context.filesDir, "outgoing_transfers").listFiles().orEmpty().any { it.name.endsWith(".part") })
             if (denied) assertFalse(item.errorMessage.orEmpty().contains("private provider detail"))
         } finally { scope.cancel(); source.delete() }
     }
@@ -163,7 +163,7 @@ class FileSendingTest {
             current.set(mac.copy(session = 2))
             source.writeBytes(byteArrayOf(99))
             val before = frames.size
-            if (corrupt) File(context.cacheDir, "outgoing_transfers").listFiles()!!.single().writeBytes(bytes.reversedArray())
+            if (corrupt) File(context.filesDir, "outgoing_transfers").listFiles()!!.single().writeBytes(bytes.reversedArray())
             assertTrue(manager.resumeTransfer(id))
             withTimeout(5000) { manager.busy.first { !it } }
             if (corrupt) {
@@ -175,12 +175,12 @@ class FileSendingTest {
                 val newChunks = frames.drop(before).filterIsInstance<ProtocolMessage.FileChunk>()
                 if (lostFinal) assertTrue(newChunks.isEmpty()) else assertEquals(65536, newChunks.single().offset)
             }
-            assertTrue(File(context.cacheDir, "outgoing_transfers").listFiles().isNullOrEmpty())
+            assertTrue(File(context.filesDir, "outgoing_transfers").listFiles().isNullOrEmpty())
         } finally { job.cancelAndJoin(); source.delete() }
     }
 
     @Test fun `paused outgoing snapshot is removed on expiry or permission revocation`() = runBlocking {
-        for (mode in listOf("expiry", "revocation", "shutdown")) {
+        for (mode in listOf("expiry", "revocation")) {
             val context = ApplicationProvider.getApplicationContext<Context>()
             val source = File.createTempFile("resume-expiry", ".bin", context.cacheDir).apply { writeBytes(byteArrayOf(1)) }
             val provider = Provider(source)
@@ -200,7 +200,7 @@ class FileSendingTest {
                 if (mode == "revocation") permitted.set(false)
                 if (mode == "shutdown") job.cancelAndJoin()
                 withTimeout(3000) { while (history.values.values.single().status != TransferStatus.FAILED) delay(10) }
-                assertTrue(File(context.cacheDir, "outgoing_transfers").listFiles().isNullOrEmpty())
+                assertTrue(File(context.filesDir, "outgoing_transfers").listFiles().isNullOrEmpty())
                 assertFalse(manager.resumeTransfer(history.values.keys.single()))
             } finally { job.cancelAndJoin(); source.delete() }
         }
