@@ -25,7 +25,22 @@ public final class FixtureReceiver extends BroadcastReceiver {
             builder.addAction(action);
             if (mode.equals("ambiguous")) builder.addAction(action);
         }
-        manager.notify(ID, builder.build());
+        try {
+            manager.notify(ID, builder.build());
+            context.getSharedPreferences("post_results", 0).edit()
+                .putString("mode", mode).putBoolean("posted", true).remove("reason").commit();
+        } catch (IllegalArgumentException rejected) {
+            // Recent Android versions forbid immutable RemoteInput actions at posting time.
+            // Keep this negative test observable without crashing or retaining an old alert.
+            if (!mode.equals("immutable")) throw rejected;
+            manager.cancel(ID);
+            context.getSharedPreferences("post_results", 0).edit()
+                .putString("mode", mode).putBoolean("posted", false)
+                .putString("reason", "Android rejected immutable RemoteInput action").commit();
+            android.widget.Toast.makeText(context,
+                "Android rejected this immutable reply test; use automated coverage.",
+                android.widget.Toast.LENGTH_LONG).show();
+        }
     }
     @Override public void onReceive(Context context, Intent intent) {
         String mode = intent.getStringExtra("mode");

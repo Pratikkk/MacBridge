@@ -24,10 +24,13 @@ adb -s SERIAL shell am broadcast -a com.macbridge.notificationfixture.TEST \
 
 Modes: `reply`, `unsupported`, `secret`, `ongoing`, `summary`, `immutable`, `auth`, `ambiguous`, `remove`, `reset`. Reset clears only local fixture reply results and the fixture alert. The reply receiver is not exported and is reachable only through its notification PendingIntent.
 
+Recent Android versions reject immutable RemoteInput actions before posting. The fixture reports that restriction with a toast and records `posted=false` in its local `shared_prefs/post_results.xml`, without crashing or retaining an old alert. On those devices, immutable capability rejection remains covered by the Android automated tests; do not claim a physical immutable mirror was tested. Successful posting records `posted=true` and its mode in the same file.
+
 Physical acceptance checklist:
 
 - With previews off, the Mac shows a redacted alert and no Reply. The eligible alert still supports Dismiss on Phone.
 - With previews on, verify Unicode title/body and native Reply / Send. Send a synthetic message such as `Hello 世界 🌉`; verify the fixture's `results.xml` has exactly one receipt and the expected text. This proves local app dispatch, not real messaging-app delivery.
+- For a one-Send measurement, use `reset`, verify empty `results.xml`, then post a new reply alert and invoke Send exactly once. Recheck after subsequent checks to detect delayed duplicate receipts.
 - Close the Mac alert normally; the fixture alert must remain on Android. Repost and use Dismiss on Phone; only the fixture alert must disappear on Android.
 - Repost/update/remove; stale handles must not execute. Unsupported/immutable/authentication-required/ambiguous variants must offer no Reply. Secret/ongoing/summary variants must not appear on Mac.
 - Disable the fixture filter, previews or notification sharing; old mirrors/actions must clear. Disconnect/reconnect or restart the companion; old notifications must not replay.
