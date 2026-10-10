@@ -26,6 +26,8 @@ class FileReceiver:
         self.state = state
         self.deadline = 0
         self.next_checkpoint = 0
+        self.result = "idle"
+        self.received_bytes = self.file_size = 0
         self.receipt_files = {}
         if state:
             self.restore()
@@ -71,6 +73,8 @@ class FileReceiver:
             self.active = dict(value, index=offset // CHUNK_SIZE, temporary=temporary, destination=destination, stream=stream, digest=digest)
             self.deadline = value['expires']
             self.paused_at = time.monotonic() - (RESUME_TTL_SECONDS - (self.deadline - time.time()))
+            self.result = "paused"
+            self.received_bytes, self.file_size = offset, value["size"]
         except (OSError, ValueError, TypeError, KeyError):
             pass
         self.checkpoint()
@@ -103,12 +107,14 @@ class FileReceiver:
             if self.paused_at is None:
                 self.paused_at = time.monotonic()
                 self.deadline = time.time() + RESUME_TTL_SECONDS
+            self.result = "paused"
             self.checkpoint()
 
     def abort(self):
         self.paused_at = None
         if self.active:
             value, self.active = self.active, None
+            self.result = "failed"
             try:
                 value['stream'].close()
             except OSError:
@@ -149,6 +155,7 @@ class FileReceiver:
                 self.receipt_files.pop(transfer_id, None)
                 if self.active and self.active['id'] == transfer_id:
                     self.abort()
+                    self.result = 'cancelled'
                 self.checkpoint()
                 return self.ack(transfer_id, 'CANCELLED')
             if kind == 'FILE_INIT':
@@ -169,6 +176,9 @@ class FileReceiver:
                                 self.receipt_files.pop(transfer_id, None)
                                 self.checkpoint()
                                 return self.ack(transfer_id, 'REJECTED')
+                        if not self.active:
+                            self.result = 'completed'
+                            self.received_bytes = self.file_size = receipt[0]
                         return self.ack(transfer_id, 'COMPLETED', receipt[0], receipt[2])
                     if self.active and self.active['id'] == transfer_id:
                         value = self.active
@@ -183,6 +193,7 @@ class FileReceiver:
                             while data := prefix.read(CHUNK_SIZE):
                                 value['digest'].update(data)
                         self.paused_at = None
+                        self.result = "receiving"
                         return self.ack(transfer_id, 'READY', value['offset'])
                     return self.ack(transfer_id, 'REJECTED')
                 if self.active:
@@ -209,6 +220,8 @@ class FileReceiver:
                 self.active = dict(id=transfer_id, name=name, size=size, checksum=digest, offset=0, index=0,
                     stream=stream, temporary=Path(stream.name), digest=hashlib.sha256(),
                     destination=self.directory / ('verified-' + str(uuid.uuid4()) + '-' + safe))
+                self.result = "receiving"
+                self.received_bytes, self.file_size = 0, size
                 self.deadline = time.time() + RESUME_TTL_SECONDS
                 self.checkpoint()
                 if size == 0:
@@ -231,6 +244,7 @@ class FileReceiver:
             value['stream'].write(data)
             value['digest'].update(data)
             value['offset'] += len(data)
+            self.received_bytes = value['offset']
             value['index'] += 1
             if value['offset'] == value['size']:
                 return self.finish()
@@ -239,6 +253,7 @@ class FileReceiver:
             return self.ack(transfer_id, 'IN_PROGRESS', value['offset'])
         except (ValueError, OSError, TypeError):
             self.abort()
+            self.result = "failed"
             return self.ack(transfer_id, 'FAILED')
 
     def finish(self):
@@ -262,5 +277,6 @@ class FileReceiver:
         if len(self.completed) > 64:
             del self.completed[next(iter(self.completed))]
         self.last_saved = value['destination']
+        self.result = 'completed'
         self.active = None
         return self.ack(value['id'], 'COMPLETED', value['size'], digest)

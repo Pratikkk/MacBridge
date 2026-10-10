@@ -73,12 +73,12 @@ fun FileWorkspace(history: List<FileTransferItem>, enabled: Boolean, busy: Boole
     }
     LazyColumn(Modifier.fillMaxSize().testTag("file_list"), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { ScreenTitle("Files", "Send here. Save there.") }
-        item { FileSendCard(enabled, busy, onChoose, onDevices,
-            paused = current.any { it.direction == TransferDirection.OUTGOING && it.status == TransferStatus.PAUSED }, guidance = guidance) }
         if (current.isNotEmpty()) {
             item { Text("Current transfers", style = MaterialTheme.typography.titleLarge) }
             items(current, key = { it.transferId }) { card(it) }
         }
+        item { FileSendCard(enabled, busy, onChoose, onDevices,
+            paused = current.any { it.direction == TransferDirection.OUTGOING && it.status == TransferStatus.PAUSED }, guidance = guidance) }
         if (recent.isNotEmpty()) {
             item { Text("Recent files", style = MaterialTheme.typography.titleLarge) }
             items(recent, key = { it.transferId }) { card(it) }
@@ -101,7 +101,7 @@ fun FileSendCard(enabled: Boolean, busy: Boolean, onChoose: () -> Unit, onDevice
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("choose_file_button")) {
             Text(if (busy) "Transfer in progress…" else if (paused) "Transfer paused" else "Choose file")
         }
-        if (paused) Text("Resume or cancel the paused transfer below before choosing another file.", color = Slate400, style = MaterialTheme.typography.bodyMedium)
+        if (paused) Text("Resume or cancel your paused transfer before choosing another file.", color = Slate400, style = MaterialTheme.typography.bodyMedium)
         if (!enabled) {
             Text(guidance ?: "Connect your Mac and turn on File sharing in Devices.", color = Slate400,
                 style = MaterialTheme.typography.bodyMedium)
@@ -126,7 +126,7 @@ fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit
             (if (incoming) item.transferId.startsWith("incoming-") && item.filePath != null && item.calculatedChecksum == item.sha256Checksum else item.transferId.startsWith("file-v1-"))
         val label = when (item.status) {
             TransferStatus.PENDING -> "Preparing document…"
-            TransferStatus.TRANSFERRING -> "${if (incoming) "Receiving" else "Sending"} · ${item.transferredBytes / 1024} / ${item.fileSize / 1024} KB"
+            TransferStatus.TRANSFERRING -> "${if (incoming) "Receiving" else "Sending"} · ${transferPercent(item)}% · ${transferBytes(item.transferredBytes.coerceIn(0, item.fileSize.coerceAtLeast(0)))} / ${transferBytes(item.fileSize)}"
             TransferStatus.COMPLETED -> if (verified) (if (incoming) "Received & verified on this phone" else "Received & verified by Mac") else "Previous transfer record"
             TransferStatus.FAILED -> item.errorMessage ?: "Transfer failed. Send the file again to retry."
             TransferStatus.PAUSED -> if (incoming) "Paused. Reconnect and choose Resume File Sending on your Mac." else "Paused. Reconnect the same Mac to resume."
@@ -136,16 +136,28 @@ fun FileTransferCard(item: FileTransferItem, saving: Boolean, onSave: () -> Unit
             LinearProgressIndicator(progress = { if (item.fileSize > 0) (item.transferredBytes.toFloat() / item.fileSize).coerceIn(0f, 1f) else 0f },
                 modifier = Modifier.fillMaxWidth())
         }
-        if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED)) {
-            TextButton(onClick = onCancel) { Text("Cancel transfer") }
-        }
         if (!incoming && item.status == TransferStatus.PAUSED) {
             OutlinedButton(onClick = onResume, enabled = canResume, modifier = Modifier.fillMaxWidth()) { Text("Resume transfer") }
+        }
+        if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED)) {
+            TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Cancel transfer") }
         }
         if (incoming && verified) {
             OutlinedButton(onClick = onSave, enabled = canSave && !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .testTag("save_file_${item.transferId}")) { Text(if (saving) "Saving…" else "Save As…") }
             Text("Choose where to save your verified copy.", color = Slate400, style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+internal fun transferPercent(item: FileTransferItem): Int =
+    if (item.fileSize > 0) (item.transferredBytes.coerceIn(0, item.fileSize).toDouble() / item.fileSize * 100).toInt() else 0
+
+internal fun transferBytes(bytes: Long): String {
+    val count = bytes.coerceAtLeast(0)
+    return when {
+        count < 1024 -> "$count B"
+        count < 1024 * 1024 -> String.format(java.util.Locale.getDefault(), "%.1f KB", count / 1024.0)
+        else -> String.format(java.util.Locale.getDefault(), "%.1f MB", count / (1024.0 * 1024))
     }
 }

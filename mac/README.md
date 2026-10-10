@@ -96,3 +96,7 @@ Mac snapshots use an owner-only `OutgoingFiles` directory under the state direct
 ## Compact flow and progress updates
 
 Resume and Cancel appear in the menu when a transfer is paused or active. Progress reports are coalesced to 250 ms intervals; final delivery, failure and paused state report immediately. Chunk acknowledgements and full-file verification remain unchanged. The native controller skips unchanged property assignments, and the pairing countdown reuses one QR raster until its code changes or expires. Validation includes a 128-chunk transfer with all acknowledgements preserved and 24 progress/status reports, plus 300 countdown requests using one QR render.
+
+## Live file progress
+
+The native menu shows one concise progress row per direction (**To Phone**, **From Phone**), including percentage, transferred/total bytes and paused or verified outcomes. Open **Settings → General** for native progress bars. Preparing, verification, cancellation and failure stay distinct, including empty files. Resume and Cancel remain tied to the outgoing transfer; cancel incoming files from Android. Receiving status updates are coalesced to 250 ms without dropping chunk acknowledgements, and terminal states update immediately. Stopping the engine clears stale progress. Duplicate file-picker panels are prevented, and diagnostics are drained without accumulating their contents in memory.

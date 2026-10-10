@@ -201,7 +201,7 @@ class ModernUiTest {
         compose.setContent { MyApplicationTheme { FileSendCard(true, false, { fail("Paused snapshot would be abandoned") }, {}, paused = true) } }
         compose.onNodeWithTag("choose_file_button").assertIsNotEnabled()
         compose.onNodeWithText("Transfer paused").assertExists()
-        compose.onNodeWithText("Resume or cancel the paused transfer below before choosing another file.").assertExists()
+        compose.onNodeWithText("Resume or cancel your paused transfer before choosing another file.").assertExists()
     }
 
     @Test fun `Save As appears only for verified incoming files and disables while saving`() {
@@ -298,10 +298,12 @@ class ModernUiTest {
         compose.setContent { MyApplicationTheme {
             FileWorkspace(listOf(received, paused), true, false, null, false, {}, {}, {}, {}, {})
         } }
-        compose.onNodeWithText("How file sharing works").assertExists()
-        compose.onNodeWithText("Interrupted? Reconnect the same device and resume within 10 minutes. Keep both apps running.").assertDoesNotExist()
-        compose.onNodeWithTag("file_list").performScrollToNode(hasText("Resume transfer"))
         compose.onNodeWithText("Current transfers").assertExists()
+        compose.onNodeWithText("Paused document").assertExists()
+        compose.onNodeWithTag("file_list").performScrollToNode(hasText("How file sharing works"))
+        compose.onNodeWithText("How file sharing works").assertExists()
+        compose.onNodeWithText("Interrupted or reopened the app? Reconnect the same device and resume within 10 minutes.").assertDoesNotExist()
+        compose.onNodeWithTag("file_list").performScrollToNode(hasText("Resume transfer"))
         compose.onNodeWithText("Resume transfer").assertIsEnabled()
         compose.onNodeWithTag("file_list").performScrollToNode(hasText("Received document"))
         compose.onNodeWithText("Received document").assertExists()

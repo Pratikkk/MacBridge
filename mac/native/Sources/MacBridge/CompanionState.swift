@@ -17,6 +17,9 @@ struct CompanionEvent: Decodable {
     let fileSending: Bool?
     let fileSendStatus: String?
     let fileCanResume: Bool?
+    let fileReceiveStatus: String?
+    let receivedBytes: Int64?
+    let receivedFileSize: Int64?
     let sentBytes: Int64?
     let fileSize: Int64?
     let endpoint: String?
@@ -71,5 +74,33 @@ struct CompanionMenuState {
         let name = phoneName.filter { !$0.isNewline && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }
         let label = name.isEmpty ? "Android Phone" : String(name.prefix(36)) + (name.count > 36 ? "…" : "")
         return "Connected to \(label)"
+    }
+}
+
+/// One bounded presentation for both transfer directions; never equate sent bytes with verification.
+struct TransferPresentation: Equatable {
+    let status: String
+    let bytes: Int64
+    let total: Int64
+    private var size: Int64 { min(104_857_600, max(0, total)) }
+    private var count: Int64 { min(size, max(0, bytes)) }
+    var visible: Bool { ["preparing", "sending", "receiving", "paused", "completed", "failed", "cancelled"].contains(status) }
+    var active: Bool { ["preparing", "sending", "receiving"].contains(status) }
+    var fraction: Double { size > 0 ? Double(count) / Double(size) : 0 }
+    var detail: String {
+        switch status {
+        case "preparing": return "Preparing…"
+        case "sending", "receiving":
+            if size == 0 || count == size { return "Verifying…" }
+            return "\(Int(fraction * 100))% · \(Self.format(count)) / \(Self.format(size))"
+        case "paused": return "Paused · \(Self.format(count)) / \(Self.format(size))"
+        case "completed": return "Verified · \(Self.format(size))"
+        case "cancelled": return "Cancelled"
+        case "failed": return "Failed — try again"
+        default: return ""
+        }
+    }
+    private static func format(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .binary)
     }
 }

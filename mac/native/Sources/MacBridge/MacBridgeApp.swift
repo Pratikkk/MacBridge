@@ -51,17 +51,8 @@ struct CompanionMenu: View {
         Button("Send File to Phone…", action: controller.sendFileToPhone)
             .disabled(!controller.running || !controller.connected || controller.fileSending || controller.fileSendStatus == "paused")
         Button("Show Received Files", action: controller.showReceivedFiles)
-        if controller.fileSending {
-            Text(controller.fileSize > 0 ? "Sending File: \(min(100, controller.sentBytes * 100 / controller.fileSize))%" : "Preparing File…")
-        } else if controller.fileSendStatus == "paused" {
-            Text("File Sending Paused — Reconnect to Resume")
-        } else if controller.fileSendStatus == "completed" {
-            Text("File Received and Verified by Phone")
-        } else if controller.fileSendStatus == "failed" {
-            Text("File Sending Failed — See Settings")
-        } else if controller.fileSendStatus == "cancelled" {
-            Text("File Sending Cancelled")
-        }
+        if controller.sending.visible { Text("To Phone · \(controller.sending.detail)") }
+        if controller.receiving.visible { Text("From Phone · \(controller.receiving.detail)") }
         if controller.fileSendStatus == "paused" && !controller.fileSending {
             Button("Resume File Sending", action: controller.resumeFileSend)
                 .disabled(!controller.fileCanResume)
@@ -187,6 +178,16 @@ struct CompanionSettingsView: View {
         }.padding(20)
     }
 
+    private func transferProgress(_ direction: String, value: TransferPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(direction) · \(value.detail)").font(.callout).monospacedDigit()
+            if value.active {
+                if value.status == "preparing" { ProgressView().controlSize(.small) }
+                else { ProgressView(value: value.fraction).accessibilityLabel(direction).accessibilityValue(value.detail) }
+            }
+        }
+    }
+
     private var status: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("MacBridge").font(.headline)
@@ -197,6 +198,8 @@ struct CompanionSettingsView: View {
                 connected: controller.connected, clipboardEnabled: controller.clipboardEnabled,
                 phoneName: controller.phoneName).status)
             LabeledContent("Local address", value: controller.endpoint)
+            if controller.sending.visible { transferProgress("To Phone", value: controller.sending) }
+            if controller.receiving.visible { transferProgress("From Phone", value: controller.receiving) }
             Text(controller.errorMessage ?? controller.lastAction)
                 .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)

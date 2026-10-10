@@ -33,6 +33,13 @@ class FileReceiverTests(unittest.TestCase):
         self.assertEqual(data, self.files()[0].read_bytes())
         self.assertIn('🌉 notes.txt', self.files()[0].name)
         self.assertEqual(0o600, self.files()[0].stat().st_mode & 0o777)
+    def test_old_receipt_replay_does_not_replace_current_receiving_progress(self):
+        self.receiver.process(self.init(b'x'), True)
+        self.receiver.process(self.chunk(b'x'), True)
+        self.receiver.process(self.init(b'y' * (CHUNK_SIZE + 1), transfer='new'), True)
+        self.assertEqual('COMPLETED', self.receiver.process(dict(self.init(b'x'), resume=True), True)['status'])
+        self.assertEqual(('receiving', 0, CHUNK_SIZE + 1), (self.receiver.result, self.receiver.received_bytes, self.receiver.file_size))
+
     def test_zero_byte_file_is_verified(self):
         self.assertEqual('COMPLETED', self.receiver.process(self.init(b''), True)['status'])
         self.assertEqual(b'', self.files()[0].read_bytes())
@@ -105,6 +112,31 @@ class FileReceiverTests(unittest.TestCase):
         self.receiver.abort()
 
 class CompanionFileTests(unittest.TestCase):
+    def test_incoming_progress_is_coalesced_and_final_state_is_immediate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            events = []
+            companion = Companion(temp, host='127.0.0.1', port=0, files=True, event_sink=events.append)
+            receiver = FileReceiver(Path(temp) / 'ReceivedFiles')
+            companion.receivers.add(receiver)
+            data = b'x' * (CHUNK_SIZE * 128)
+            init = dict(type='FILE_INIT', transferId='progress', fileName='🌉 progress.bin', fileSize=len(data), sha256Checksum=hashlib.sha256(data).hexdigest(), chunkSize=CHUNK_SIZE)
+            try:
+                acks = [receiver.process(init, True)]
+                companion.receive_progress(receiver, clock=lambda: 0)
+                for index in range(128):
+                    acks.append(receiver.process(dict(type='FILE_CHUNK', transferId='progress', chunkIndex=index, offset=index*CHUNK_SIZE, totalChunks=128, chunkLength=CHUNK_SIZE, dataBase64=base64.b64encode(data[index*CHUNK_SIZE:(index+1)*CHUNK_SIZE]).decode()), True))
+                    companion.receive_progress(receiver, clock=lambda: 0)
+                self.assertEqual(129, len(acks))
+                self.assertEqual(2, len(events))
+                self.assertEqual('receiving', events[0]['fileReceiveStatus'])
+                self.assertEqual(('completed',len(data),len(data)),(events[-1]['fileReceiveStatus'],events[-1]['receivedBytes'],events[-1]['receivedFileSize']))
+                receiver.process(dict(init, transferId='paused'), True)
+                receiver.pause(); companion.receive_progress(receiver, clock=lambda: 0)
+                self.assertEqual('paused',events[-1]['fileReceiveStatus'])
+                receiver.abort(); companion.receive_progress(receiver, clock=lambda: 0)
+                self.assertEqual('failed',events[-1]['fileReceiveStatus'])
+            finally: companion.close()
+
     def test_default_permission_off_strict_toggle_and_revocation(self):
         with tempfile.TemporaryDirectory() as temp:
             companion = Companion(temp, host='127.0.0.1', port=0, event_sink=lambda _: None)

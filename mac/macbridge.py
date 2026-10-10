@@ -113,6 +113,9 @@ class Companion:
         self.sender = None
         self.sender_peer = None
         self.peer_receivers = {}
+        self.last_receiver = None
+        self.next_receive_report = 0
+        self.receive_report_key = None
         self.transfer_state = self.directory / 'TransferState'
         sender_path = self.transfer_state / 'sender.json'
         try:
@@ -193,6 +196,8 @@ class Companion:
             return
         with self.lock:
             remaining = max(0, self.secret_expires - time.monotonic())
+            current = self.peer_receivers.get((self.active_id, self.peers.get(self.active_id, {}).get('publicKey')))
+            receiver = (current if current and current.result != "idle" else next((r for r in self.peer_receivers.values() if r.active), self.last_receiver))
             value = dict(event='state', running=not self.stop_event.is_set(),
                 connected=self.active_id is not None,
                 phoneName=self.peers.get(self.active_id, {}).get('name', 'Android Phone'),
@@ -201,6 +206,8 @@ class Companion:
                 fileSendStatus=self.sender.result if self.sender else 'idle',
                 fileCanResume=bool(self.sender and self.sender.result == 'paused' and self.active_stream is not None and self.sender_peer == (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))),
                 connectionId=self.connection_id, fileSending=self.sender.busy if self.sender else False,
+                fileReceiveStatus=receiver.result if receiver else 'idle',
+                receivedBytes=receiver.received_bytes if receiver else 0, receivedFileSize=receiver.file_size if receiver else 0,
                 sentBytes=self.sender.sent_bytes if self.sender else 0, fileSize=self.sender.file_size if self.sender else 0, endpoint=f'{self.address}:{self.port}',
                 pairingURI=self.pairing_uri(self.address) if self.address and self.secret and remaining > 0 else '',
                 expiresAt=time.time() + remaining, lastAction=self.last_action)
@@ -375,8 +382,7 @@ class Companion:
                         elif message.get('type') in ('FILE_INIT', 'FILE_CHUNK', 'FILE_CANCEL'):
                             ack = receiver.process(message, self.files)
                             write_frame(stream, ack)
-                            if ack['status'] == 'COMPLETED':
-                                self.report('File received and verified. Open Received Files to view it.')
+                            self.receive_progress(receiver)
                         elif message.get('type') == 'CLIPBOARD':
                             text = message.get('content')
                             if not isinstance(text, str) or message.get('mimeType') != 'text/plain':
@@ -415,6 +421,17 @@ class Companion:
             raw.close()
             self.slots.release()
             self.emit_state()
+
+    def receive_progress(self, receiver, clock=time.monotonic):
+        # Presentation is coalesced; every transfer frame still receives its exact ACK.
+        self.last_receiver = receiver
+        key = (id(receiver), receiver.result)
+        now = clock()
+        if key != self.receive_report_key or now >= self.next_receive_report:
+            self.receive_report_key = key
+            self.next_receive_report = now + .25
+            self.report('File received and verified. Open Received Files to view it.' if receiver.result == 'completed' else
+                'Receiving file from phone' if receiver.result == 'receiving' else 'File receiving ' + receiver.result)
 
     def expire_transfers(self):
         with self.lock:

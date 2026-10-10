@@ -20,6 +20,9 @@ final class CompanionController: ObservableObject {
     @Published private(set) var fileSendStatus = "idle"
     @Published private(set) var sentBytes: Int64 = 0
     @Published private(set) var fileSize: Int64 = 0
+    @Published private(set) var receiving = TransferPresentation(status: "idle", bytes: 0, total: 0)
+    var sending: TransferPresentation { TransferPresentation(status: fileSendStatus, bytes: sentBytes, total: fileSize) }
+    private var filePickerOpen = false
     private var connectionId = ""
     @Published private(set) var filesEnabled = UserDefaults.standard.bool(forKey: "filesEnabled")
     private var child: Process?
@@ -66,6 +69,7 @@ final class CompanionController: ObservableObject {
                 self.fileSending = false
                 self.fileCanResume = false
                 self.fileSendStatus = "idle"
+                self.receiving = TransferPresentation(status: "idle", bytes: 0, total: 0)
                 self.connectionId = ""
                 self.pairingURI = ""
                 self.endpoint = "Companion stopped"
@@ -82,9 +86,9 @@ final class CompanionController: ObservableObject {
             errorMessage = "Could not start the companion: \(error.localizedDescription)"
             return
         }
-        // Drain stderr without exposing identity files, secrets or clipboard content in the UI.
+        // Drain diagnostic output in bounded chunks; retain no paths, secrets or contents.
         DispatchQueue.global(qos: .utility).async {
-            _ = stderr.fileHandleForReading.readDataToEndOfFile()
+            while !stderr.fileHandleForReading.availableData.isEmpty {}
         }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             do {
@@ -122,6 +126,7 @@ final class CompanionController: ObservableObject {
         update(\.fileSending, value.fileSending ?? false)
         update(\.fileSendStatus, value.fileSendStatus ?? "idle")
         update(\.fileCanResume, value.fileCanResume ?? false)
+        update(\.receiving, TransferPresentation(status: value.fileReceiveStatus ?? "idle", bytes: value.receivedBytes ?? 0, total: value.receivedFileSize ?? 0))
         update(\.sentBytes, value.sentBytes ?? 0)
         update(\.fileSize, value.fileSize ?? 0)
         update(\.lastAction, value.lastAction ?? "Ready")
@@ -156,7 +161,8 @@ final class CompanionController: ObservableObject {
         command(["action": "setFilesEnabled", "enabled": enabled])
     }
     func sendFileToPhone() {
-        guard running, connected, !fileSending, !connectionId.isEmpty else { return }
+        guard running, connected, !fileSending, fileSendStatus != "paused", !filePickerOpen, !connectionId.isEmpty else { return }
+        filePickerOpen = true
         let destination = connectionId
         let panel = NSOpenPanel()
         panel.title = "Send File to Phone"
@@ -167,6 +173,7 @@ final class CompanionController: ObservableObject {
         panel.allowsMultipleSelection = false
         NSApplication.shared.activate(ignoringOtherApps: true)
         panel.begin { [weak self] result in
+            self?.filePickerOpen = false
             guard result == .OK, let url = panel.url else { return }
             self?.command(["action": "sendFile", "path": url.path, "connectionId": destination])
         }
@@ -215,6 +222,7 @@ final class CompanionController: ObservableObject {
         fileSending = false
         fileCanResume = false
         fileSendStatus = "idle"
+        receiving = TransferPresentation(status: "idle", bytes: 0, total: 0)
         connectionId = ""
         pairingURI = ""
     }
