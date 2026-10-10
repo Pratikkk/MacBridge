@@ -7,7 +7,6 @@ import android.provider.Settings
 import com.example.crypto.IdentityManager
 import com.example.data.MacBridgeDatabase
 import com.example.model.ConnectionState
-import com.example.model.MirroredNotification
 import com.example.model.PairedDevice
 import com.example.model.ProtocolMessage
 import com.example.network.MacSimulatorBench
@@ -55,7 +54,7 @@ class BridgeManager(
         deviceId = identityManager.deviceId
     )
 
-    // App-specific notification mirror filter preferences
+    // Content-free app preferences; sharing is opt-in for each app and each Mac.
     private val appMirrorPrefs = context.getSharedPreferences("macbridge_app_filters", Context.MODE_PRIVATE)
 
     lateinit var secureTransport: SecureTransport
@@ -64,9 +63,17 @@ class BridgeManager(
     lateinit var fileTransferManager: FileTransferManager
     lateinit var macSimulator: MacSimulatorBench
 
-    init {
-        initSubsystems()
-    }
+    private val notificationRelay by lazy { NotificationRelay(CoroutineScope(scope.coroutineContext + Dispatchers.IO),
+        current = {
+            val state = secureTransport.connectionState.value as? ConnectionState.Connected
+            val saved = state?.let { database.pairedDeviceDao().getDeviceById(it.device.id) }
+            if (state == null || state.isSimulated || saved == null || saved.isBlocked || saved.fingerprint != state.device.fingerprint) null
+            else NotificationDestination(saved.id, saved.fingerprint, state.connectedSince, saved.allowNotifications)
+        }, permitted = { isAppMirroringEnabled(it) && com.example.service.MacBridgeNotificationListener.isPermissionGranted(context) },
+        send = { msg, target -> secureTransport.sendMessage(msg, target.id, target.session) }) }
+
+    init { initSubsystems() }
+
 
     private fun initSubsystems() {
         secureTransport = SecureTransport(
@@ -183,6 +190,7 @@ class BridgeManager(
                 allowNotifications = allowNotifications
             )
             database.pairedDeviceDao().update(updated)
+            if (!allowNotifications) clearNotificationMirrors(deviceId = device.id)
             DiagnosticLogger.i(TAG, "Updated permissions for ${device.name}: Clipboard=$allowClipboard, Files=$allowFiles, Notifications=$allowNotifications")
         }
     }
@@ -212,44 +220,45 @@ class BridgeManager(
         clipboardManager.sendTextToMac(text, device.name) { secureTransport.sendMessage(it, device.id) }
     }
 
-    fun isAppMirroringEnabled(packageName: String): Boolean {
-        return appMirrorPrefs.getBoolean("mirror_$packageName", true)
+    fun isAppMirroringEnabled(packageName: String): Boolean = appMirrorPrefs.getBoolean("enabled_$packageName", false)
+    fun notificationPreviewsEnabled(): Boolean = appMirrorPrefs.getBoolean("previews", false)
+    fun setNotificationPreviews(enabled: Boolean) {
+        notificationRelay.invalidate()
+        appMirrorPrefs.edit().putBoolean("previews", enabled).apply()
+        clearNotificationMirrors()
     }
-
+    fun rememberNotificationApp(pkg: String, name: String) {
+        if (pkg.length > 255 || name.length > 100) return
+        if (!appMirrorPrefs.contains("name_$pkg") && notificationApps().size >= 100) return
+        if (appMirrorPrefs.getString("name_$pkg", null) != name) appMirrorPrefs.edit().putString("name_$pkg", name).apply()
+    }
+    fun notificationApps(): List<Pair<String, String>> = appMirrorPrefs.all.entries
+        .filter { it.key.startsWith("name_") && it.value is String }
+        .map { it.key.removePrefix("name_") to (it.value as String) }.sortedBy { it.second.lowercase() }
     fun setAppMirroringEnabled(packageName: String, enabled: Boolean) {
-        appMirrorPrefs.edit().putBoolean("mirror_$packageName", enabled).apply()
-        DiagnosticLogger.d(TAG, "Mirroring for $packageName set to: $enabled")
+        if (!enabled) notificationRelay.invalidate()
+        appMirrorPrefs.edit().putBoolean("enabled_$packageName", enabled).apply()
+        if (!enabled) clearNotificationMirrors(packageName)
     }
-
+    private fun notificationDestination(): NotificationDestination? {
+        val state = secureTransport.connectionState.value as? ConnectionState.Connected ?: return null
+        if (state.isSimulated) return null
+        return NotificationDestination(state.device.id, state.device.fingerprint, state.connectedSince, state.device.allowNotifications)
+    }
     fun handleOutgoingNotification(mirrorMsg: ProtocolMessage.NotificationMirror) {
-        val state = secureTransport.connectionState.value
-        if (state is ConnectionState.Connected && state.device.allowNotifications) {
-            secureTransport.sendMessage(mirrorMsg)
-        }
-        scope.launch(Dispatchers.IO) {
-            database.notificationDao().insert(
-                MirroredNotification(
-                    notificationId = mirrorMsg.notificationId,
-                    packageName = mirrorMsg.packageName,
-                    appName = mirrorMsg.appName,
-                    title = mirrorMsg.title,
-                    text = mirrorMsg.text,
-                    timestamp = mirrorMsg.timestamp,
-                    hasReply = mirrorMsg.hasReplyAction
-                )
-            )
-        }
+        val target = notificationDestination() ?: return
+        notificationRelay.offer(target, mirrorMsg)
     }
-
     fun handleNotificationDismissedLocally(notificationKey: String) {
-        val dismissMsg = ProtocolMessage.NotificationAction(
-            notificationId = notificationKey,
-            actionType = "DISMISS"
-        )
-        secureTransport.sendMessage(dismissMsg)
-        scope.launch(Dispatchers.IO) {
-            database.notificationDao().markDismissed(notificationKey)
-        }
+        if (notificationKey.toByteArray().size > 512) return
+        val target = notificationDestination() ?: return
+        if (!notificationRelay.offer(target, ProtocolMessage.NotificationAction(notificationKey, "REMOVE"))) secureTransport.disconnect()
+    }
+    fun clearNotificationMirrors(packageName: String = "", deviceId: String? = null) {
+        notificationRelay.invalidate()
+        val target = notificationDestination() ?: return
+        if (deviceId != null && target.id != deviceId) return
+        if (!notificationRelay.offer(target, ProtocolMessage.NotificationAction(packageName, "CLEAR"))) secureTransport.disconnect()
     }
 
     private suspend fun handleIncomingMessage(msg: ProtocolMessage, sourceId: String? = null) {
@@ -272,13 +281,7 @@ class BridgeManager(
             is ProtocolMessage.FileInit, is ProtocolMessage.FileChunk, is ProtocolMessage.FileCancel -> {
                 if (!state.isSimulated) fileReceivingManager.process(msg, FileTransferTarget(device, state.connectedSince))
             }
-            is ProtocolMessage.NotificationAction -> {
-                if (device.allowNotifications && msg.actionType == "DISMISS") {
-                    scope.launch(Dispatchers.IO) {
-                        database.notificationDao().markDismissed(msg.notificationId)
-                    }
-                }
-            }
+            // Remote dismiss/reply actions are not implemented in this milestone.
             else -> {}
         }
     }

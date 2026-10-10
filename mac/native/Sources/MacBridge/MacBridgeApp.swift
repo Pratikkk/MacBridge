@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CompanionWindows.shared.show(.status)
         return true
     }
+    func applicationDidBecomeActive(_ notification: Notification) { CompanionController.shared.refreshNotificationAccess() }
     func applicationWillTerminate(_ notification: Notification) {
         CompanionController.shared.stop()
     }
@@ -115,6 +116,7 @@ struct CompanionSettingsView: View {
         TabView(selection: $windows.selection) {
             pairing.tabItem { Text("Pair a Phone") }.tag(CompanionSettingsTab.pairing)
             devices.tabItem { Text("Devices") }.tag(CompanionSettingsTab.devices)
+            notifications.tabItem { Text("Notifications") }.tag(CompanionSettingsTab.notifications)
             status.tabItem { Text("General") }.tag(CompanionSettingsTab.status)
         }
         .padding(20).frame(width: 500, height: 510)
@@ -191,6 +193,19 @@ struct CompanionSettingsView: View {
         }
     }
 
+    private var notifications: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Phone notifications").font(.headline)
+            Toggle("Allow phone notifications", isOn: Binding(get: { controller.notificationsEnabled }, set: controller.setNotifications))
+            Text(controller.notificationStatus).font(.callout).foregroundStyle(.secondary)
+            Text("On Android, enable notification sharing for this Mac in Devices. In Settings → Notifications, grant access and select apps. Previews start hidden on your phone.").font(.callout)
+            Text("Alerts are cleared when sharing stops or the phone disconnects. Existing phone notifications are never replayed. Dismiss and reply actions are planned.").font(.callout).foregroundStyle(.secondary)
+            Button("Open macOS notification settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) }
+            }
+            Spacer()
+        }.padding(20)
+    }
     private var status: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("MacBridge").font(.headline)

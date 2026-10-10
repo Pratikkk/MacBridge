@@ -36,6 +36,9 @@ def detect_address():
     return address
 
 
+from notification_mirror import NotificationMirror
+
+
 def create_listener(host, port):
     # Bonjour can resolve IPv6; listen on both families when binding all interfaces.
     dual = host == '0.0.0.0' and socket.has_dualstack_ipv6()
@@ -88,6 +91,8 @@ def verify_signature(public_key, signature, transcript):
 class Companion:
     def __init__(self, directory, host='0.0.0.0', port=8990, echo=False, clipboard=False, event_sink=None, files=False):
         self.event_sink = event_sink
+        self.notifications = False
+        self.notification_mirror = NotificationMirror()
         self.address = None
         self.last_action = "Ready to connect"
         self.directory = Path(directory)
@@ -218,7 +223,7 @@ class Companion:
                 connected=self.active_id is not None,
                 phoneName=self.peers.get(self.active_id, {}).get('name', 'Android Phone'),
                 peers=[dict(id=key, name=peer.get('name', 'Android Phone')) for key, peer in sorted(self.peers.items())],
-                clipboardEnabled=self.clipboard, filesEnabled=self.files,
+                clipboardEnabled=self.clipboard, filesEnabled=self.files, notificationsEnabled=self.notifications,
                 fileSendStatus=self.sender.result if self.sender else 'idle',
                 fileCanResume=bool(self.sender and self.sender.result == 'paused' and self.active_stream is not None and self.sender_peer == (self.active_id, self.peers.get(self.active_id, {}).get('publicKey'))),
                 connectionId=self.connection_id, fileSending=self.sender.busy if self.sender else False,
@@ -294,6 +299,17 @@ class Companion:
             with self.lock:
                 self.clipboard = enabled
             self.report('Clipboard sharing enabled' if enabled else 'Clipboard sharing paused')
+        elif action == 'setNotificationsEnabled':
+            enabled = command.get('enabled')
+            if not isinstance(enabled, bool):
+                raise ValueError('Notification setting must be true or false')
+            with self.lock:
+                self.notifications = enabled
+                if not enabled:
+                    self.notification_mirror.reset()
+                    if self.event_sink:
+                        self.event_sink(dict(event='notification', connectionId=self.connection_id, operation='clear'))
+            self.report('Notification receiving enabled' if enabled else 'Notification receiving paused')
         elif action == 'setFilesEnabled':
             enabled = command.get('enabled')
             if not isinstance(enabled, bool):
@@ -390,6 +406,7 @@ class Companion:
                         self.sender.interrupt()
                     self.active_socket, self.active_stream, self.active_id = secure, stream, peer_id
                     self.connection_id = str(uuid.uuid4())
+                    self.notification_mirror.reset()
                 with self.lock:
                     identity = (peer_id, self.peers[peer_id].get('publicKey'))
                     receiver = self.peer_receivers.get(identity)
@@ -416,6 +433,10 @@ class Companion:
                             ack = receiver.process(message, self.files)
                             write_frame(stream, ack)
                             self.receive_progress(receiver)
+                        elif message.get('type') in ('NOTIFICATION', 'NOTIFICATION_ACTION'):
+                            for event in self.notification_mirror.process(message, self.notifications):
+                                if self.event_sink:
+                                    self.event_sink(dict(event='notification', connectionId=self.connection_id, **event))
                         elif message.get('type') == 'CLIPBOARD':
                             text = message.get('content')
                             if not isinstance(text, str) or message.get('mimeType') != 'text/plain':
@@ -445,6 +466,7 @@ class Companion:
                 if self.active_socket is secure:
                     self.active_socket = self.active_stream = self.active_id = None
                     self.connection_id = ""
+                    self.notification_mirror.reset()
                     if self.sender:
                         self.sender.interrupt()
                 self.connections.discard(raw)
@@ -556,6 +578,7 @@ class Companion:
                     pass
                 self.active_socket = self.active_stream = self.active_id = None
                 self.connection_id = ""
+                self.notification_mirror.reset()
                 if self.sender:
                     self.sender.cancel()
 
@@ -563,6 +586,7 @@ class Companion:
         self.stop_event.set()
         self.listener.close()
         with self.lock:
+            self.notification_mirror.reset()
             if self.sender:
                 self.sender.interrupt()
             for receiver in set(self.peer_receivers.values()) | self.receivers:

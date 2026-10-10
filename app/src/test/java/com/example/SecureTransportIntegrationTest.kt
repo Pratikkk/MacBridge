@@ -47,8 +47,30 @@ class SecureTransportIntegrationTest {
         } finally { transport.stop(); scope.cancel() }
     }
 
+    @Test
+    fun `notification frames interoperate without closing TLS and stale sessions cannot send`() = withMac(notifications = true) { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val echoed = CompletableDeferred<ProtocolMessage>()
+        val transport = SecureTransport(IdentityManager(context, true), scope, { message, _ -> echoed.complete(message) }, {})
+        try { runBlocking(Dispatchers.IO) {
+            transport.pairDevice(code.device, code.secret) {}
+            val state = transport.connectionState.value as ConnectionState.Connected
+            val alert = ProtocolMessage.NotificationMirror("test-key", "com.chat", "Chat 🌉", "Hello 世界", "Body")
+            assertFalse(transport.sendMessage(alert, state.device.id, state.connectedSince - 1))
+            assertTrue(transport.sendMessage(alert, state.device.id, state.connectedSince))
+            assertTrue(transport.sendMessage(alert.copy(timestamp = 42), state.device.id, state.connectedSince))
+            assertTrue(transport.sendMessage(ProtocolMessage.NotificationAction("test-key", "REMOVE"), state.device.id, state.connectedSince))
+            assertTrue(transport.sendMessage(ProtocolMessage.ClipboardSync("still connected", sourceDevice = "Test")))
+            assertEquals("still connected", (withTimeout(5000) { echoed.await() } as ProtocolMessage.ClipboardSync).content)
+            val events = File(peerDirectory, "notifications.jsonl").readLines().map { org.json.JSONObject(it) }
+            assertEquals(listOf("post", "remove"), events.map { it.getString("operation") })
+            assertEquals("Hello 世界", events.first().getString("title"))
+        } } finally { transport.stop(); scope.cancel() }
+    }
+
     private lateinit var peerDirectory: File
-    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, test: (PairingCode) -> Unit) {
+    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, notifications: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
         val directory = Files.createTempDirectory("macbridge-integration-").toFile()
@@ -77,7 +99,22 @@ class SecureTransportIntegrationTest {
             Path(sys.argv[2], 'sender-result.txt').write_text(peer.sender.result)
             while True: time.sleep(1)
         """.trimIndent()
-        val command = if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")
+        val notificationScript = """
+            import sys,json
+            from pathlib import Path
+            sys.path.insert(0,sys.argv[1])
+            from macbridge import Companion
+            def event(value):
+                if value['event'] == 'notification':
+                    with open(Path(sys.argv[2]) / 'notifications.jsonl', 'a') as out:
+                        out.write(json.dumps(value)+'\n')
+            peer=Companion(sys.argv[2],host='127.0.0.1',port=0,echo=True,event_sink=event)
+            peer.notifications=True
+            print('PAIRING_URI='+peer.pairing_uri('127.0.0.1'),flush=True)
+            peer.serve()
+        """.trimIndent()
+        val command = if (notifications) listOf("python3", "-u", "-c", notificationScript, File(root, "mac").absolutePath, directory.absolutePath)
+            else if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")
             else listOf("python3", File(root, "mac/macbridge.py").absolutePath,
                 "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",
                 "--address", "127.0.0.1", "--headless", "--echo") + (if (files) listOf("--files") else emptyList())

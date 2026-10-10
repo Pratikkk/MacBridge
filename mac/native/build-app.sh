@@ -11,6 +11,7 @@ mv -f "$app_dir/Contents/MacOS/MacBridge.new" "$app_dir/Contents/MacOS/MacBridge
 cp ../file_sender.py "$app_dir/Contents/Resources/file_sender.py"
 cp ../file_receiver.py "$app_dir/Contents/Resources/file_receiver.py"
 cp ../transfer_state.py "$app_dir/Contents/Resources/transfer_state.py"
+cp ../notification_mirror.py "$app_dir/Contents/Resources/notification_mirror.py"
 cp ../macbridge.py "$app_dir/Contents/Resources/macbridge.py"
 cp ../../assets/branding/MacBridge.icns "$app_dir/Contents/Resources/MacBridge.icns"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'

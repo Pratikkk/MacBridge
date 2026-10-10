@@ -16,6 +16,30 @@ struct CompanionChecks {
         if !value { throw Failure(message: message) }
     }
     static func main() throws {
+        func alertEvent(_ key: String, session: String = "session", text: String = "Body 🌉") throws -> CompanionEvent {
+            let data = try JSONSerialization.data(withJSONObject: ["event": "notification", "operation": "post",
+                "connectionId": session, "notificationId": key, "appName": "Chat", "title": "Hello 世界", "text": text])
+            return try JSONDecoder().decode(CompanionEvent.self, from: data)
+        }
+        var alerts = NotificationCatalog()
+        let firstAlert = try alerts.post(alertEvent("key"), session: "session")!
+        try require(firstAlert.0.title == "Hello 世界" && !firstAlert.0.id.contains("key"), "Unicode or opaque notification identifier failed")
+        let duplicateAlert = try alerts.post(alertEvent("key"), session: "session")
+        try require(duplicateAlert == nil, "Duplicate must not redraw an alert")
+        let changedAlert = try alerts.post(alertEvent("key", text: "Updated"), session: "session")
+        try require(changedAlert?.0.text == "Updated", "Update must replace the same alert")
+        let staleAlert = try alerts.post(alertEvent("old", session: "old-session"), session: "session")
+        try require(staleAlert == nil, "Stale session published an alert")
+        let oversizedAlert = try alerts.post(alertEvent("x", text: String(repeating: "x", count: 8193)), session: "session")
+        try require(oversizedAlert == nil, "Oversized notification reached presentation")
+        for index in 0..<1000 { _ = try alerts.post(alertEvent("key-\(index)"), session: "session") }
+        try require(alerts.items.count == 100, "Notification catalog grew without bound")
+        try require(alerts.remove(session: "session", key: "unknown") == nil, "Unknown removal changed alerts")
+        try require(alerts.remove(session: "session", key: "key-999") != nil, "Known removal failed")
+        alerts.reset()
+        try require(alerts.items.isEmpty, "Session teardown retained notification content")
+        print("PASS: bounded notification catalog, Unicode, duplicates, updates, stale sessions, removal and teardown")
+
         let identity = BonjourIdentity(id: "mac-public-id", name: String(repeating: "🌉", count: 100),
             fingerprint: Array(repeating: "AB", count: 32).joined(separator: ":"), port: 8990, ipv6: true)
         try require(identity.valid && identity.serviceName.utf8.count <= 63, "Bonjour descriptor is invalid")

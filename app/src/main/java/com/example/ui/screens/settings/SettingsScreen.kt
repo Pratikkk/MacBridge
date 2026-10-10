@@ -20,15 +20,22 @@ import com.example.ui.theme.*
 @Composable
 fun SettingsScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
     val context = LocalContext.current
+    var notifications by rememberSaveable { mutableStateOf(false) }
+    BackHandler(notifications) { notifications = false }
     var security by rememberSaveable { mutableStateOf(false) }
     BackHandler(security) { security = false }
-    if (security) {
+    if (notifications) {
+        Column(Modifier.fillMaxSize()) {
+            TextButton(onClick = { notifications = false }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("‹ Settings") }
+            com.example.ui.screens.notifications.NotificationsScreen(bridgeManager, Modifier.weight(1f))
+        }
+    } else if (security) {
         Column(Modifier.fillMaxSize()) {
             TextButton(onClick = { security = false }, modifier = Modifier.padding(horizontal = 16.dp).testTag("back_to_settings")) { Text("‹ Settings") }
             SecurityAuditScreen(bridgeManager, Modifier.weight(1f))
         }
     } else {
-        SettingsContent(onDevices, onSecurity = { security = true }, onBattery = {
+        SettingsContent(onDevices, onNotifications = { notifications = true }, onSecurity = { security = true }, onBattery = {
             try { context.startActivity(bridgeManager.getBatteryOptimizationIntent()) }
             catch (_: Exception) { Toast.makeText(context, "Open Android Settings → Apps → MacBridge → Battery", Toast.LENGTH_LONG).show() }
         })
@@ -36,7 +43,7 @@ fun SettingsScreen(bridgeManager: BridgeManager, onDevices: () -> Unit) {
 }
 
 @Composable
-fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: () -> Unit) {
+fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: () -> Unit, onNotifications: () -> Unit = {}) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)) {
         ScreenTitle("Settings", "Sharing and background access.")
@@ -44,6 +51,11 @@ fun SettingsContent(onDevices: () -> Unit, onSecurity: () -> Unit, onBattery: ()
             Text("Sharing permissions", style = MaterialTheme.typography.titleLarge)
             Text("Choose which Macs can exchange clipboard text and files. New pairings start with sharing off.", color = Slate400)
             OutlinedButton(onClick = onDevices, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Manage devices") }
+        }
+        Panel {
+            Text("Phone notifications", style = MaterialTheme.typography.titleLarge)
+            Text("Choose which apps can send alerts to your Mac. Message previews start hidden.", color = Slate400)
+            TextButton(onClick = onNotifications, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Set up notifications") }
         }
         Panel {
             Text("Background connection", style = MaterialTheme.typography.titleLarge)

@@ -1,6 +1,6 @@
 # MacBridge development companion
 
-MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, phone revocation, and Bonjour discovery. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport and notification mirroring remain future steps.
+MacBridge now has a native SwiftUI menu-bar app with phone status, clipboard and file receiving controls, pairing codes, a real QR code, phone revocation, and Bonjour discovery. It manages the existing Python TLS engine as a child process and preserves the identity and paired phones from the CLI. Keychain storage, a fully Swift transport and notification actions remain future steps.
 
 ## Native Mac app
 
@@ -102,3 +102,11 @@ Resume and Cancel appear in the menu when a transfer is paused or active. Progre
 ## Live file progress
 
 The native menu shows one concise progress row per direction (**To Phone**, **From Phone**), including percentage, transferred/total bytes and paused or verified outcomes. Open **Settings → General** for native progress bars. Preparing, verification, cancellation and failure stay distinct, including empty files. Resume and Cancel remain tied to the outgoing transfer; cancel incoming files from Android. Receiving status updates are coalesced to 250 ms without dropping chunk acknowledgements, and terminal states update immediately. Stopping the engine clears stale progress. Duplicate file-picker panels are prevented, and diagnostics are drained without accumulating their contents in memory.
+
+## Phone notification alerts
+
+Choose **Settings… → Notifications → Allow phone notifications** and approve the macOS alert request. In Android **Devices**, enable notification sharing for this Mac; in **Settings → Notifications**, grant Android access and choose apps. App filters and message previews start off. The compact menu stays unchanged; setup lives in the separate settings window.
+
+The native app uses Apple’s [UserNotifications framework](https://developer.apple.com/documentation/usernotifications/unusernotificationcenter) for local banners and Notification Center entries. It does not use Apple Push Notification service or a cloud relay for this feature. Alerts have opaque session-scoped identifiers, bounded text and catalogs, and no reply/dismiss controls. Android removal updates remove the corresponding Mac entry; disconnect, engine shutdown or disabling reception clears the app’s pending and displayed entries. macOS system notification settings can suppress banners independently.
+
+Notification content is sent through the private engine status pipe only for validated notification events, never ordinary status snapshots. It remains in bounded memory rather than bridge files or diagnostic logs. macOS manages its own delivered notification storage. Existing alerts are not restored after restart or reconnect, and the CLI does not present alerts. See the root README for consent, preview behavior, delivery limits and manual verification.

@@ -78,8 +78,8 @@ The Android app uses a black-and-white palette with soft decorative blur behind 
 
 - **Home**: connection status and pair/connect/cancel, with direct Clipboard and Files shortcuts once a Mac is paired. If several Macs are saved, choose one in Devices.
 - **Share**: Clipboard and Files tabs. Send documents in either direction with verified progress, cancellation and Save As for received files, or send current phone text, instructions for receiving Mac text, and local history with copy, expand and confirmed clearing. Send actions are disabled when disconnected, blocked, in demo mode or when the latest stored sharing permission is off.
-- **Devices**: paired Macs first, clipboard and file sharing permissions, connect/disconnect, identity disclosure and confirmed removal. Scan or paste to add another Mac.
-- **Settings**: sharing permissions, Android battery settings, security diagnostics with unfinished notification features kept outside the everyday flow. Prototype simulator and benchmark actions are outside the everyday navigation.
+- **Devices**: paired Macs first, clipboard, file and notification sharing permissions, connect/disconnect, identity disclosure and confirmed removal. Scan or paste to add another Mac.
+- **Settings**: sharing permissions, notification setup with app filters and hidden previews by default, Android battery settings, and security diagnostics. Prototype simulator and benchmark actions are outside the everyday navigation.
 
 The selected tab and scroll positions survive recreation; pairing secrets stay in memory only. Navigation disposes pending scanner callbacks. Automated UI checks cover offline/reconnecting states, revoked permissions, multiple Macs, confirmations, navigation restoration, blocked peers and narrow screens with enlarged text.
 
@@ -152,3 +152,13 @@ Home shows live sending and receiving progress above the connection card, includ
 Android and Mac share a white suspension-bridge mark on charcoal, matching the monochrome interface. Android includes adaptive and themed monochrome icons plus legacy density and round variants. The Mac companion bundle includes its native ICNS icon; its menu-bar connection symbol remains the standard compact status glyph.
 
 The editable geometry lives in `assets/branding/icon.json`, with SVG and PNG previews alongside the Mac ICNS. Regenerate all platform assets on macOS with `python3 tools/generate-icons.py` (Python 3 and Command Line Tools; no third-party packages). Generated launcher resources and the ICNS are committed so normal app builds do not require regeneration.
+
+## Mirror phone notifications
+
+On Android, enable **Devices → Notification sharing** for your Mac. Open **Settings → Set up notifications → Open notification access**, grant Android access, then select apps. Apps start off and appear in the list after posting an alert (use **Refresh apps**). Current alerts are used only to identify available apps; their content is never replayed. On Mac, open **Settings → Notifications**, turn on **Allow phone notifications**, and approve the macOS notification request. macOS also controls banner visibility in System Settings → Notifications.
+
+New alerts from selected apps are forwarded only to the connected, authenticated Mac. **Show message previews** starts off: the Mac receives the app name and a generic alert. Enable previews deliberately to include message text. Secret, ongoing and group-summary notifications are excluded. Updates replace the same alert; duplicate content does not create another banner. Removing an alert on Android removes its Mac mirror. Disabling an app, hiding previews, revoking Android access or disconnecting clears the applicable Mac alerts. macOS permission revocation is checked when the companion becomes active and after delivery failure.
+
+Notification content is not saved to Android history, engine files or diagnostic logs. In-memory catalogs cap at 100 alerts and event queues at 64. Delivery is best effort: bursts can be dropped, missed updates are not replayed after reconnect, and there is no delivery receipt. macOS may retain displayed alerts in its own Notification Center until removed. This milestone mirrors alerts only; Mac dismiss/reply actions are tracked separately. The standalone CLI does not display notifications.
+
+A manual device check should enable both systems’ access, select one app, receive a redacted alert, enable previews and receive an update, remove it on Android, disable the app, revoke access, and disconnect/reconnect without old content replay. Native catalog and permission/session logic are covered automatically; actual macOS banner placement and Android system permission dialogs require this manual check.

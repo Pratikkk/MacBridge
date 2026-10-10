@@ -214,8 +214,11 @@ class SecureTransport(
         }
     }
 
-    fun sendMessage(message: ProtocolMessage, expectedDeviceId: String? = null): Boolean {
-        val connected = session ?: return false
+    fun sendMessage(message: ProtocolMessage, expectedDeviceId: String? = null, expectedSession: Long? = null): Boolean {
+        val connected = synchronized(lock) {
+            if (expectedSession != null && (state.value as? ConnectionState.Connected)?.connectedSince != expectedSession) return false
+            session
+        } ?: return false
         if (expectedDeviceId != null && connected.device.id != expectedDeviceId) return false
         return try {
             WireFrames.write(connected.output, ProtocolCodec.encode(message))

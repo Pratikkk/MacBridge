@@ -6,6 +6,13 @@ struct PairedPhone: Decodable, Identifiable, Equatable {
 }
 
 struct CompanionEvent: Decodable {
+    let operation: String?
+    let notificationId: String?
+    let packageName: String?
+    let appName: String?
+    let title: String?
+    let text: String?
+    let notificationsEnabled: Bool?
     let discovery: BonjourIdentity?
     let event: String
     let running: Bool?
@@ -80,7 +87,7 @@ enum CompanionEventStream {
 }
 
 // Keep menu labels bounded, and availability aligned with the real engine state.
-enum CompanionSettingsTab: Hashable { case pairing, devices, status }
+enum CompanionSettingsTab: Hashable { case pairing, devices, status, notifications }
 
 struct CompanionMenuState {
     let running: Bool

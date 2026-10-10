@@ -43,6 +43,18 @@ class ModernUiTest {
     private val mac = PairedDevice("mac1", "My Mac", "AB:".repeat(31) + "AB", "pin", "192.168.0.2", allowClipboard = true)
     private val connected = ConnectionState.Connected(mac, mac.lastKnownIp, mac.port)
 
+    @Test fun `notification previews start hidden and sharing is disabled for blocked Macs`() {
+        var previews by mutableStateOf(false)
+        compose.setContent { MyApplicationTheme { Column {
+            com.example.ui.screens.notifications.NotificationPreviewControl(previews) { previews = it }
+            PairedDeviceItemCard(mac.copy(isBlocked = true), {}, {}, { _, _, _ -> })
+        } } }
+        compose.onNodeWithText("Show message previews").assertIsDisplayed()
+        compose.onAllNodes(isToggleable())[0].assertIsOff().performClick()
+        compose.runOnIdle { assertTrue(previews) }
+        compose.onNodeWithTag("notification_permission_mac1").assertIsOff().assertIsNotEnabled()
+    }
+
     @Test fun `nearby Mac requires QR pairing rather than trusting discovery`() {
         var pairRequests = 0
         val peer = DiscoveredPeer("nearby", "Nearby Mac 🌉", "192.168.0.2", 8990, "untrusted-hint")

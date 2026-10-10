@@ -12,6 +12,10 @@ final class CompanionController: ObservableObject {
     @Published private(set) var endpoint = "Starting companion…"
     @Published private(set) var discoveryStatus = "Starting…"
     private let bonjour = BonjourPublisher()
+    private let alerts = NotificationPresenter()
+    @Published private(set) var notificationsEnabled = UserDefaults.standard.bool(forKey: "notificationsEnabled")
+    @Published private(set) var notificationStatus = "Checking macOS access…"
+    private var notificationPermissionRequest = 0
     @Published private(set) var pairingURI = ""
     @Published private(set) var expiresAt = Date.distantPast
     @Published private(set) var lastAction = "Starting companion…"
@@ -35,6 +39,9 @@ final class CompanionController: ObservableObject {
 
     func start() {
         guard child == nil else { return }
+        alerts.onStatus = { [weak self] value in self?.update(\.notificationStatus, value) }
+        alerts.onAccessDenied = { [weak self] in self?.setNotifications(false) }
+        alerts.refreshPermission()
         bonjour.onStatus = { [weak self] value in self?.update(\.discoveryStatus, value) }
         generation += 1
         let token = generation
@@ -68,6 +75,7 @@ final class CompanionController: ObservableObject {
                 guard let self, self.generation == token else { return }
                 self.child = nil
                 self.bonjour.stop()
+                self.alerts.configure(session: "", enabled: false)
                 self.input = nil
                 self.running = false
                 self.connected = false
@@ -114,6 +122,7 @@ final class CompanionController: ObservableObject {
     }
 
     private func accept(_ value: CompanionEvent) {
+        if value.event == "notification" { alerts.receive(value); return }
         if value.event == "error" {
             errorMessage = value.message ?? "The companion could not complete that action."
             return
@@ -129,6 +138,11 @@ final class CompanionController: ObservableObject {
         update(\.expiresAt, Date(timeIntervalSince1970: value.expiresAt ?? 0))
         update(\.clipboardEnabled, value.clipboardEnabled ?? false)
         update(\.filesEnabled, value.filesEnabled ?? false)
+        let newSession = value.connected == true ? (value.connectionId ?? "") : ""
+        alerts.configure(session: newSession, enabled: notificationsEnabled)
+        if value.notificationsEnabled != notificationsEnabled {
+            command(["action": "setNotificationsEnabled", "enabled": notificationsEnabled])
+        }
         update(\.connectionId, value.connectionId ?? "")
         update(\.fileSending, value.fileSending ?? false)
         update(\.fileSendStatus, value.fileSendStatus ?? "idle")
@@ -163,6 +177,25 @@ final class CompanionController: ObservableObject {
     func setClipboard(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "clipboardEnabled")
         command(["action": "setClipboardEnabled", "enabled": enabled])
+    }
+    func refreshNotificationAccess() { alerts.refreshPermission() }
+    func setNotifications(_ enabled: Bool) {
+        notificationPermissionRequest += 1
+        let request = notificationPermissionRequest
+        if !enabled {
+            notificationsEnabled = false
+            UserDefaults.standard.set(false, forKey: "notificationsEnabled")
+            alerts.configure(session: connectionId, enabled: false)
+            command(["action": "setNotificationsEnabled", "enabled": false])
+            return
+        }
+        alerts.requestPermission { [weak self] allowed in
+            guard let self, self.notificationPermissionRequest == request else { return }
+            self.notificationsEnabled = allowed
+            UserDefaults.standard.set(allowed, forKey: "notificationsEnabled")
+            self.alerts.configure(session: self.connectionId, enabled: allowed)
+            self.command(["action": "setNotificationsEnabled", "enabled": allowed])
+        }
     }
     func setFiles(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "filesEnabled")
@@ -220,6 +253,7 @@ final class CompanionController: ObservableObject {
         }
     }
     func stop() {
+        alerts.configure(session: "", enabled: false)
         bonjour.stop()
         generation += 1
         let previous = child
