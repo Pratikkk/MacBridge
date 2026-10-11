@@ -104,93 +104,99 @@ object ProtocolCodec {
         }
 
         return try {
-            val json = JSONObject(payload)
-            when (json.getString("type")) {
+            val json = StrictJson.objectFrom(payload)
+            when (json.stringField("type")) {
                 "HELLO" -> {
                     val caps = mutableListOf<String>()
-                    val arr = json.optJSONArray("capabilities")
+                    val arr = if (json.has("capabilities")) json.getJSONArray("capabilities") else null
                     if (arr != null) {
-                        for (i in 0 until arr.length()) caps.add(arr.getString(i))
+                        require(arr.length() <= 32) { "Too many capabilities" }
+                        for (i in 0 until arr.length()) {
+                            val value = arr.get(i)
+                            require(value is String) { "Invalid capability" }
+                            caps.add(value)
+                        }
                     }
                     ProtocolMessage.Hello(
-                        deviceId = json.getString("deviceId"),
-                        deviceName = json.getString("deviceName"),
-                        fingerprint = json.getString("fingerprint"),
-                        protocolVersion = json.optInt("protocolVersion", 1),
+                        deviceId = json.stringField("deviceId"),
+                        deviceName = json.stringField("deviceName"),
+                        fingerprint = json.stringField("fingerprint"),
+                        protocolVersion = json.optionalInt("protocolVersion", 1),
                         capabilities = caps
                     )
                 }
                 "PAIR_REQUEST" -> ProtocolMessage.PairRequest(
-                    deviceId = json.getString("deviceId"),
-                    deviceName = json.getString("deviceName"),
-                    fingerprint = json.getString("fingerprint"),
-                    oneTimeSecret = json.getString("oneTimeSecret"),
-                    timestamp = json.optLong("timestamp", System.currentTimeMillis())
+                    deviceId = json.stringField("deviceId"),
+                    deviceName = json.stringField("deviceName"),
+                    fingerprint = json.stringField("fingerprint"),
+                    oneTimeSecret = json.stringField("oneTimeSecret"),
+                    timestamp = json.optionalLong("timestamp", System.currentTimeMillis())
                 )
                 "PAIR_RESPONSE" -> ProtocolMessage.PairResponse(
-                    accepted = json.getBoolean("accepted"),
-                    deviceId = json.getString("deviceId"),
-                    fingerprint = json.getString("fingerprint"),
-                    reason = json.optString("reason", null)
+                    accepted = json.booleanField("accepted"),
+                    deviceId = json.stringField("deviceId"),
+                    fingerprint = json.stringField("fingerprint"),
+                    reason = json.optionalString("reason")
                 )
                 "HEARTBEAT" -> ProtocolMessage.Heartbeat(
-                    seq = json.getLong("seq"),
-                    timestamp = json.optLong("timestamp", System.currentTimeMillis()),
-                    isAck = json.optBoolean("isAck", false)
+                    seq = json.longField("seq"),
+                    timestamp = json.optionalLong("timestamp", System.currentTimeMillis()),
+                    isAck = json.optionalBoolean("isAck", false)
                 )
                 "CLIPBOARD" -> ProtocolMessage.ClipboardSync(
-                    content = json.getString("content"),
-                    timestamp = json.optLong("timestamp", System.currentTimeMillis()),
-                    sourceDevice = json.getString("sourceDevice"),
-                    mimeType = json.optString("mimeType", "text/plain")
+                    content = json.stringField("content"),
+                    timestamp = json.optionalLong("timestamp", System.currentTimeMillis()),
+                    sourceDevice = json.stringField("sourceDevice"),
+                    mimeType = json.optionalString("mimeType", "text/plain")!!
                 )
                 "FILE_INIT" -> ProtocolMessage.FileInit(
-                    transferId = json.getString("transferId"),
-                    fileName = json.getString("fileName"),
-                    fileSize = json.getLong("fileSize"),
-                    sha256Checksum = json.getString("sha256Checksum"),
-                    mimeType = json.optString("mimeType", "application/octet-stream"),
-                    chunkSize = json.optInt("chunkSize", 64 * 1024),
-                    resume = json.optBoolean("resume", false)
+                    transferId = json.stringField("transferId"),
+                    fileName = json.stringField("fileName"),
+                    fileSize = json.longField("fileSize"),
+                    sha256Checksum = json.stringField("sha256Checksum"),
+                    mimeType = json.optionalString("mimeType", "application/octet-stream")!!,
+                    chunkSize = json.optionalInt("chunkSize", 64 * 1024),
+                    resume = json.optionalBoolean("resume", false)
                 )
                 "FILE_CHUNK" -> ProtocolMessage.FileChunk(
-                    transferId = json.getString("transferId"),
-                    chunkIndex = json.getInt("chunkIndex"),
-                    totalChunks = json.getInt("totalChunks"),
-                    offset = json.getLong("offset"),
-                    dataBase64 = json.getString("dataBase64"),
-                    chunkLength = json.getInt("chunkLength")
+                    transferId = json.stringField("transferId"),
+                    chunkIndex = json.intField("chunkIndex"),
+                    totalChunks = json.intField("totalChunks"),
+                    offset = json.longField("offset"),
+                    dataBase64 = json.stringField("dataBase64"),
+                    chunkLength = json.intField("chunkLength")
                 )
                 "FILE_ACK" -> ProtocolMessage.FileAck(
-                    transferId = json.getString("transferId"),
-                    receivedBytes = json.getLong("receivedBytes"),
-                    status = json.getString("status"),
-                    sha256Checksum = if (json.has("sha256Checksum")) json.getString("sha256Checksum") else null
+                    transferId = json.stringField("transferId"),
+                    receivedBytes = json.longField("receivedBytes"),
+                    status = json.stringField("status"),
+                    sha256Checksum = if (json.has("sha256Checksum")) json.stringField("sha256Checksum") else null
                 )
-                "FILE_CANCEL" -> ProtocolMessage.FileCancel(json.getString("transferId"))
+                "FILE_CANCEL" -> ProtocolMessage.FileCancel(json.stringField("transferId"))
                 "NOTIFICATION" -> ProtocolMessage.NotificationMirror(
-                    notificationId = json.getString("notificationId"),
-                    packageName = json.getString("packageName"),
-                    appName = json.getString("appName"),
-                    title = json.getString("title"),
-                    text = json.getString("text"),
-                    timestamp = json.optLong("timestamp", System.currentTimeMillis()),
-                    hasReplyAction = json.optBoolean("hasReplyAction", false),
-                    isDismissed = json.optBoolean("isDismissed", false),
-                    dismissToken = if (json.has("dismissToken")) json.getString("dismissToken") else null,
-                    replyToken = if (json.has("replyToken")) json.getString("replyToken") else null
+                    notificationId = json.stringField("notificationId"),
+                    packageName = json.stringField("packageName"),
+                    appName = json.stringField("appName"),
+                    title = json.stringField("title"),
+                    text = json.stringField("text"),
+                    timestamp = json.optionalLong("timestamp", System.currentTimeMillis()),
+                    hasReplyAction = json.optionalBoolean("hasReplyAction", false),
+                    isDismissed = json.optionalBoolean("isDismissed", false),
+                    dismissToken = if (json.has("dismissToken")) json.stringField("dismissToken") else null,
+                    replyToken = if (json.has("replyToken")) json.stringField("replyToken") else null
                 )
                 "NOTIFICATION_ACTION" -> ProtocolMessage.NotificationAction(
-                    notificationId = json.getString("notificationId"),
-                    actionType = json.getString("actionType"),
-                    replyText = if (json.has("replyText")) json.getString("replyText") else null,
-                    actionToken = if (json.has("actionToken")) json.getString("actionToken") else null,
-                    status = if (json.has("status")) json.getString("status") else null
+                    notificationId = json.stringField("notificationId"),
+                    actionType = json.stringField("actionType"),
+                    replyText = if (json.has("replyText")) json.stringField("replyText") else null,
+                    actionToken = if (json.has("actionToken")) json.stringField("actionToken") else null,
+                    status = if (json.has("status")) json.stringField("status") else null
                 )
                 else -> null
             }
         } catch (e: Exception) {
-            DiagnosticLogger.w(TAG, "Failed to decode protocol frame: ${e.message}")
+            // Parser exception messages can include the entire peer payload.
+            DiagnosticLogger.w(TAG, "Invalid protocol frame (${e.javaClass.simpleName})")
             null
         }
     }

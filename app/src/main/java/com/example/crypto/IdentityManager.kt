@@ -21,17 +21,17 @@ import java.util.UUID
  * Device fingerprint is the SHA-256 hash of the public key, surviving app restarts.
  * Provides seamless fallback for JVM / Robolectric unit testing environments where AndroidKeyStore provider is absent.
  */
-class IdentityManager(private val context: Context, private val allowSoftwareFallback: Boolean = false) {
+class IdentityManager private constructor(private val context: Context,
+    private val allowSoftwareFallback: Boolean, private val keyStore: KeyStore?) {
+
+    constructor(context: Context, allowSoftwareFallback: Boolean = false) :
+        this(context, allowSoftwareFallback, openKeyStore())
+
+    internal constructor(context: Context, keyStoreForTest: KeyStore) : this(context, false, keyStoreForTest)
 
     private val prefs = context.getSharedPreferences("macbridge_identity_prefs", Context.MODE_PRIVATE)
 
     private var fallbackKeyPair: KeyPair? = null
-
-    private val keyStore: KeyStore? = try {
-        KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-    } catch (_: Exception) {
-        null
-    }
 
     val deviceId: String
         get() {
@@ -60,6 +60,11 @@ class IdentityManager(private val context: Context, private val allowSoftwareFal
         if (ks != null) {
             try {
                 if (!ks.containsAlias(KEY_ALIAS)) {
+                    // An existing device ID means this is recovery, not first use.
+                    // Never silently replace a lost/revoked production identity.
+                    check(allowSoftwareFallback || !prefs.contains("device_id")) {
+                        "Existing Android identity key is missing; explicit identity recovery is required"
+                    }
                     val keyPairGenerator = KeyPairGenerator.getInstance(
                         KeyProperties.KEY_ALGORITHM_EC,
                         ANDROID_KEYSTORE
@@ -163,5 +168,8 @@ class IdentityManager(private val context: Context, private val allowSoftwareFal
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "macbridge_identity_key"
+        private fun openKeyStore(): KeyStore? = try {
+            KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        } catch (_: Exception) { null }
     }
 }

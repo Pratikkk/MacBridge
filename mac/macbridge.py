@@ -21,6 +21,7 @@ import uuid
 from file_receiver import FileReceiver, RESUME_TTL_SECONDS
 from file_sender import FileSender
 from transfer_state import TransferState
+from bounded_json import load_object
 
 MAX_FRAME = 1024 * 1024
 
@@ -55,10 +56,7 @@ def read_frame(stream):
     line = stream.readline(MAX_FRAME + 2)
     if not line or not line.endswith(b'\n') or len(line) > MAX_FRAME + 1:
         raise ValueError('Missing or oversized frame')
-    value = json.loads(line.decode('utf-8'))
-    if not isinstance(value, dict):
-        raise ValueError('Expected a JSON object')
-    return value
+    return load_object(line.decode('utf-8'))
 
 
 def write_frame(stream, message):
@@ -133,7 +131,7 @@ class Companion:
         sender_path = self.transfer_state / 'sender.json'
         try:
             if not sender_path.is_symlink() and sender_path.stat().st_size <= 128 * 1024:
-                identity = json.loads(sender_path.read_text()).get('identity')
+                identity = load_object(sender_path.read_text()).get('identity')
                 if isinstance(identity, list) and len(identity) == 4 and identity[:2] == [self.device_id, self.pin] and self.peers.get(identity[2], {}).get('publicKey') == identity[3]:
                     self.sender_peer = tuple(identity[2:])
                     self.sender = FileSender(self.directory / 'OutgoingFiles', lambda _: (_ for _ in ()).throw(OSError('Reconnect first')), self.report,

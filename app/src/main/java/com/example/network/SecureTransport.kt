@@ -68,12 +68,12 @@ class SecureTransport(
             val certificate = socket.session.peerCertificates.first() as X509Certificate
             val publicKey = Base64.encodeToString(certificate.publicKey.encoded, Base64.NO_WRAP)
             val established = Session(socket, device.copy(pinnedPublicKey = publicKey))
-            val challenge = JSONObject(WireFrames.read(established.input))
-            require(challenge.getString("type") == "AUTH_CHALLENGE" && challenge.getInt("protocolVersion") == 2) { "Unsupported authentication protocol" }
-            require(challenge.getString("deviceId") == device.id &&
-                challenge.getString("fingerprint") == device.fingerprint &&
-                challenge.getString("publicKey") == publicKey) { "Mac identity does not match pairing code" }
-            val nonce = challenge.getString("nonce")
+            val challenge = StrictJson.objectFrom(WireFrames.read(established.input))
+            require(challenge.stringField("type") == "AUTH_CHALLENGE" && challenge.intField("protocolVersion") == 2) { "Unsupported authentication protocol" }
+            require(challenge.stringField("deviceId") == device.id &&
+                challenge.stringField("fingerprint") == device.fingerprint &&
+                challenge.stringField("publicKey") == publicKey) { "Mac identity does not match pairing code" }
+            val nonce = challenge.stringField("nonce")
             require(Regex("[0-9a-f]{64}").matches(nonce)) { "Invalid authentication challenge" }
             val transcript = "macbridge-auth-v2\n$nonce\n${device.id}\n${device.fingerprint}\n${identityManager.deviceId}\n${identityManager.getFingerprint()}"
             val proof = JSONObject().apply {
@@ -85,8 +85,8 @@ class SecureTransport(
                 secret?.let { put("secret", it) }
             }
             WireFrames.write(established.output, proof.toString())
-            val ack = JSONObject(WireFrames.read(established.input))
-            require(ack.getString("type") == "AUTH_OK" && ack.getString("deviceId") == device.id) { "Mac rejected authentication; use a fresh pairing code" }
+            val ack = StrictJson.objectFrom(WireFrames.read(established.input))
+            require(ack.stringField("type") == "AUTH_OK" && ack.stringField("deviceId") == device.id) { "Mac rejected authentication; use a fresh pairing code" }
             socket.soTimeout = 45000
             return established
         } catch (e: Exception) {

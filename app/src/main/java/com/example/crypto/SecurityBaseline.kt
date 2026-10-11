@@ -20,12 +20,12 @@ object SecurityBaselineAuditor {
         SecurityRule(4, "Keys Stay Put", "Production Android identity fails closed without Keystore.", false,
             "Android uses Keystore with no software fallback by default. Development Mac keys use owner-only files; native Keychain storage remains to implement."),
         SecurityRule(5, "Treat Input as Hostile", "Bounded frames and filename sanitation are implemented.", false,
-            "UTF-8 frames are limited to 1 MiB before parsing. Phone-to-Mac files are capped at 100 MB, ordered in 64 KB chunks and published only after size and SHA-256 verification. A full protocol audit remains pending."),
+            "UTF-8 frames are limited to 1 MiB before parsing. Phone-to-Mac files are capped at 100 MB, ordered in 64 KB chunks and published only after size and SHA-256 verification. JSON parsing now caps nesting at 32, rejects duplicate fields and avoids scalar coercion. Repository review completed; independent assessment remains pending."),
         SecurityRule(6, "Least Privilege", "New peers start with all features disabled.", false,
             "Clipboard and outgoing file sends check current per-Mac permissions. Mac file receiving starts disabled. Notification sharing checks current Mac/app permissions and Android access; previews start hidden. Dismiss/reply actions and broader controls remain to review."),
         SecurityRule(7, "Local Only", "Direct connections without a relay.", false,
-            "No relay in the bridge protocol. Inherited Firebase dependencies and initialization require review before claiming zero cloud activity."),
+            "The bridge uses no relay. Unused Firebase AI and App Check dependencies were removed. Google Play services scanning can download its module; this is not a zero-network-activity claim."),
         SecurityRule(8, "Network Path Review", "Android Kotlin and a development Python Mac peer.", false,
-            "Native Swift Mac companion and independent protocol review remain planned. No blanket compliance assertion.")
+            "Native SwiftUI companion manages the Python TLS engine. A scoped repository protocol/storage review is documented; native Swift transport and independent security assessment remain pending.")
     )
 }

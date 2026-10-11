@@ -30,6 +30,8 @@ keytool -genkeypair -keystore debug.keystore -storepass android -keypass android
 
 The real TLS integration tests require Python 3 and OpenSSL on PATH and permission to bind loopback sockets. They start an isolated Mac test peer and never modify the real Mac clipboard.
 
+See [Protocol and storage security review](docs/security-review.md) for the threat model, fixed findings, validation and remaining release risks.
+
 See [Android performance measurements and profiling](docs/android-performance.md) for the read-only physical-device idle sampler, lifecycle/query behavior, regression checks, and measurement limits.
 
 ## Mac companion
@@ -54,7 +56,7 @@ These checks cover identity and code rejection, Unicode, bounded and malformed f
 
 ## Remaining work
 
-The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage and a full security review remain planned. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage and independent security assessment remain planned. The scoped repository [security review](docs/security-review.md) records fixes and open release risks. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
 
 ## Pair by QR
 

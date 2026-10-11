@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from bounded_json import load_object
 
 LIMIT = 128 * 1024
 
@@ -18,7 +19,7 @@ class TransferState:
         try:
             if self.path.is_symlink() or self.path.stat().st_size > LIMIT:
                 return {}
-            value = json.loads(self.path.read_text())
+            value = load_object(self.path.read_text())
             if value.get('version') != 1 or value.get('identity') != self.identity:
                 return {}
             return value

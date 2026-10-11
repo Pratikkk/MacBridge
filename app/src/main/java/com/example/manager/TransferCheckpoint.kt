@@ -5,6 +5,7 @@ import com.example.model.*
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import com.example.network.StrictJson
 
 /** Atomic metadata contains only relative private filenames and pinned peer identifiers. */
 internal class TransferCheckpoint(private val file: File) {
@@ -13,7 +14,7 @@ internal class TransferCheckpoint(private val file: File) {
         atomic.openRead().use { input ->
             val bytes = input.readNBytesCompat(128 * 1024 + 1)
             require(bytes.size <= 128 * 1024)
-            JSONObject(String(bytes, Charsets.UTF_8)).also { require(it.getInt("version") == 1) }
+            StrictJson.objectFrom(String(bytes, Charsets.UTF_8)).also { require(it.get("version") == 1) }
         }
     } catch (_: Exception) { JSONObject() }
     @Synchronized fun save(value: JSONObject) {
