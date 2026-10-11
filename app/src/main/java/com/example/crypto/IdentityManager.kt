@@ -22,12 +22,14 @@ import java.util.UUID
  * Provides seamless fallback for JVM / Robolectric unit testing environments where AndroidKeyStore provider is absent.
  */
 class IdentityManager private constructor(private val context: Context,
-    private val allowSoftwareFallback: Boolean, private val keyStore: KeyStore?) {
+    private val allowSoftwareFallback: Boolean, private val keyStore: KeyStore?,
+    private val generateKey: () -> Unit = ::generateAndroidKey) {
 
     constructor(context: Context, allowSoftwareFallback: Boolean = false) :
         this(context, allowSoftwareFallback, openKeyStore())
 
-    internal constructor(context: Context, keyStoreForTest: KeyStore) : this(context, false, keyStoreForTest)
+    internal constructor(context: Context, keyStoreForTest: KeyStore, generateForTest: () -> Unit = ::generateAndroidKey) :
+        this(context, false, keyStoreForTest, generateForTest)
 
     private val prefs = context.getSharedPreferences("macbridge_identity_prefs", Context.MODE_PRIVATE)
 
@@ -53,6 +55,11 @@ class IdentityManager private constructor(private val context: Context,
 
     init {
         ensureIdentityKeyExists()
+        if (!allowSoftwareFallback) {
+            validateIdentity()
+            if (!prefs.getBoolean("identity_created", false))
+                check(prefs.edit().putBoolean("identity_created", true).commit())
+        }
     }
 
     private fun ensureIdentityKeyExists() {
@@ -62,32 +69,20 @@ class IdentityManager private constructor(private val context: Context,
                 if (!ks.containsAlias(KEY_ALIAS)) {
                     // An existing device ID means this is recovery, not first use.
                     // Never silently replace a lost/revoked production identity.
-                    check(allowSoftwareFallback || !prefs.contains("device_id")) {
-                        "Existing Android identity key is missing; explicit identity recovery is required"
+                    if (!allowSoftwareFallback && (prefs.contains("device_id") || prefs.getBoolean("identity_created", false))) {
+                        throw IdentityAccessException(IdentityFailure.MISSING,
+                            IllegalStateException("Existing identity is missing; explicit identity recovery is required"))
                     }
-                    val keyPairGenerator = KeyPairGenerator.getInstance(
-                        KeyProperties.KEY_ALGORITHM_EC,
-                        ANDROID_KEYSTORE
-                    )
-                    val parameterSpec = KeyGenParameterSpec.Builder(
-                        KEY_ALIAS,
-                        KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-                    )
-                        .setDigests(KeyProperties.DIGEST_SHA256)
-                        .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
-                        .build()
-
-                    keyPairGenerator.initialize(parameterSpec)
-                    keyPairGenerator.generateKeyPair()
+                    generateKey()
                 }
                 if (!allowSoftwareFallback) prefs.edit().remove("sw_pub_key").remove("sw_priv_key").apply()
                 return
             } catch (e: Exception) {
-                if (!allowSoftwareFallback) throw IllegalStateException("Android Keystore identity unavailable", e)
+                if (!allowSoftwareFallback) throw identityAccessFailure(e)
             }
         }
 
-        check(allowSoftwareFallback) { "Android Keystore identity unavailable" }
+        if (!allowSoftwareFallback) throw IdentityAccessException(IdentityFailure.UNAVAILABLE)
 
         // JVM / Robolectric software EC key pair fallback
         if (fallbackKeyPair == null) {
@@ -106,6 +101,23 @@ class IdentityManager private constructor(private val context: Context,
                 generateSoftwareKeyPair()
             }
         }
+    }
+
+    private fun validateIdentity() {
+        try {
+            val public = keyStore?.getCertificate(KEY_ALIAS)?.publicKey
+                ?: throw IdentityAccessException(IdentityFailure.MISSING)
+            val private = keyStore.getKey(KEY_ALIAS, null) as? PrivateKey
+                ?: throw IdentityAccessException(IdentityFailure.MISSING)
+            // Presence alone does not establish that an invalidated key can sign.
+            val probe = "MacBridge identity availability".toByteArray(Charsets.UTF_8)
+            val signer = Signature.getInstance("SHA256withECDSA")
+            signer.initSign(private); signer.update(probe)
+            val signature = signer.sign()
+            val verifier = Signature.getInstance("SHA256withECDSA")
+            verifier.initVerify(public); verifier.update(probe)
+            if (!verifier.verify(signature)) throw IdentityAccessException(IdentityFailure.MISSING)
+        } catch (error: Exception) { throw identityAccessFailure(error) }
     }
 
     private fun generateSoftwareKeyPair() {
@@ -168,6 +180,37 @@ class IdentityManager private constructor(private val context: Context,
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "macbridge_identity_key"
+        private fun generateAndroidKey() {
+            val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
+            generator.initialize(KeyGenParameterSpec.Builder(KEY_ALIAS,
+                KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1")).build())
+            generator.generateKeyPair()
+        }
+
+        /** Called only inside a durable, explicitly confirmed reset. Never a startup fallback. */
+        internal fun prepareReplacement(context: Context) {
+            val ks = openKeyStore() ?: throw IdentityAccessException(IdentityFailure.UNAVAILABLE)
+            prepareReplacement(context, ks, ::generateAndroidKey)
+        }
+
+        internal fun prepareReplacement(context: Context, ks: KeyStore, generate: () -> Unit) {
+            if (ks.containsAlias(KEY_ALIAS)) {
+                try {
+                    IdentityManager(context, ks, generate)
+                    return // A previous confirmed reset already generated its key.
+                } catch (error: IdentityAccessException) {
+                    if (error.reason != IdentityFailure.MISSING) throw error
+                    ks.deleteEntry(KEY_ALIAS)
+                }
+            }
+            generate()
+            // Validate without the missing-alias first-use guard; an old ID is kept
+            // until all reset stages have completed, so interruption fails closed.
+            IdentityManager(context, ks, generate)
+        }
+
         private fun openKeyStore(): KeyStore? = try {
             KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         } catch (_: Exception) { null }

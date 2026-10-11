@@ -34,6 +34,10 @@ class FileSendingTest {
         override suspend fun getTransfer(transferId: String) = values[transferId]
         override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }
         override suspend fun deleteById(transferId: String) { values.remove(transferId) }
+        override suspend fun failForIdentityReset() {
+            values.replaceAll { _, item -> if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
+                item.copy(status = TransferStatus.FAILED) else item }
+        }
         override suspend fun failInterruptedOutgoing() {}
         override suspend fun failInterruptedIncoming() {}
     }

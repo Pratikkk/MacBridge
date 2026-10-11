@@ -74,6 +74,7 @@ tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
   inputs.file(rootProject.file("mac/macbridge.py")).withPropertyName("macBridgeTestPeer")
   inputs.file(rootProject.file("mac/transfer_state.py")).withPropertyName("macBridgeTransferState")
   inputs.file(rootProject.file("mac/bounded_json.py")).withPropertyName("macBridgeBoundedJson")
+  inputs.file(rootProject.file("mac/identity_store.py")).withPropertyName("macBridgeIdentityStore")
 }
 
 // Some unused dependencies are commented out below instead of being removed.

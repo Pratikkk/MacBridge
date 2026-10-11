@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PairedDeviceDao {
+    @Query("DELETE FROM paired_devices")
+    suspend fun clearAll()
+
     @Query("SELECT * FROM paired_devices WHERE isBlocked = 0 ORDER BY pairedTimestamp DESC")
     fun getAllPairedDevices(): Flow<List<PairedDevice>>
 
@@ -53,6 +56,9 @@ interface ClipboardDao {
 
 @Dao
 interface FileTransferDao {
+    @Query("UPDATE file_transfers SET status = 'FAILED', errorMessage = 'Identity reset. Start a new transfer after pairing.' WHERE status IN ('PENDING', 'TRANSFERRING', 'PAUSED')")
+    suspend fun failForIdentityReset()
+
     @Query("SELECT * FROM file_transfers ORDER BY timestamp DESC")
     fun getAllTransfers(): Flow<List<FileTransferItem>>
 

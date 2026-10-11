@@ -32,6 +32,11 @@ class MacBridgeForegroundService : Service {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if ((application as? MacBridgeApplication)?.bridgeManager == null) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val action = intent?.action
         val deviceName = intent?.getStringExtra(EXTRA_DEVICE_NAME) ?: "Mac"
 

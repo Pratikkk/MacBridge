@@ -1,0 +1,16 @@
+# Android identity recovery
+
+Android startup now checks Keystore on a worker thread before starting discovery, transfers or sharing. The key must exist and successfully sign a bounded local probe verified by its public key. First use creates an Android Keystore key; a durable creation marker or an existing device ID prevents silent key replacement on subsequent startup. Production does not enable the JVM software fallback.
+
+If secure storage is temporarily unavailable, a content-free screen offers **Try again**. Unlock the phone or restart and retry. Provider/read errors are treated conservatively as unavailable; a missing key/certificate or a permanently invalidated key is a definite recovery case. Android documents permanent invalidation in [KeyPermanentlyInvalidatedException](https://developer.android.com/reference/android/security/keystore/KeyPermanentlyInvalidatedException). Retry never deletes keys, clears pairings or resumes a reset automatically. Notification listener, foreground-service and tile actions fail closed while the bridge is unavailable. Shares received during recovery are discarded; share again from the source app after recovery.
+
+For a lost/unusable identity, **Reset identity…** opens an explicit **Reset and unpair** confirmation. It explains the consequences before any changes:
+
+- Replace the unavailable phone identity and device ID; remove saved Mac pins/permissions and notification app/previews consent. If the old key becomes available before confirmation, keep it and all pairings instead.
+- Mark unfinished transfers failed and invalidate current/backup/new checkpoint metadata. Old snapshots and incoming partials become ineligible for resume and are cleaned by normal transfer initialization.
+- Retain verified received files and completed transfer records so Save As remains available after recovery. Retain clipboard history, the phone’s display name and files already exported to other apps. No uninstall, whole-database clear or blanket storage wipe occurs.
+- Pair again on both devices. Forget the old phone entry on the Mac; the phone cannot revoke that entry remotely while its old identity is unavailable.
+
+A durable reset journal is saved before key/trust changes and cleared only after every stage succeeds. If interrupted by failure/shutdown, startup remains blocked and **Finish identity reset…** requires confirmation again. The replacement key is reused if already generated. Activity recreation dismisses an unconfirmed reset dialog; there is no timed retry or idle polling.
+
+Regression fixtures use an isolated key provider with real EC signatures and an in-memory Room database. They cover first use, healthy restart, lost alias, provider outage/retry, permanent invalidation, interrupted reset at each stage, duplicate clicks, cancellation, durable-marker failure, old checkpoint backups, file/history preservation, service entry points and share delivery. Compose checks cover retry, confirmation/cancel/recreation, loading and interrupted reset. Live device keys are never deleted to simulate loss. These checks do not establish every vendor Keystore failure mode; diagnostics and recovery text do not include keys, provider exception contents, peer names or private share content.

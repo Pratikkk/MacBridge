@@ -7,6 +7,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import com.example.crypto.IdentityStartup
+import com.example.ui.screens.recovery.IdentityRecoveryScreen
 import com.example.manager.TextSendResult
 import com.example.ui.MacBridgeApp
 import com.example.ui.theme.MyApplicationTheme
@@ -17,22 +24,32 @@ import com.example.sharing.parseSharedContent
 
 class MainActivity : ComponentActivity() {
     private val shareInbox = ShareInbox()
+    private var queuedIntent by mutableStateOf<Intent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         val app = application as MacBridgeApplication
-        val bridgeManager = app.bridgeManager
-
-        // Handle Share Sheet intents
-        if (savedInstanceState == null) handleIntent(intent, bridgeManager)
+        if (savedInstanceState == null) queuedIntent = intent
         else shareInbox.restore(savedInstanceState)
 
         setContent {
+            val startup by app.identityStartup.collectAsStateWithLifecycle()
+            StartupIntentEffect(startup, queuedIntent, onClear = { queuedIntent = null },
+                onReady = { delivered, bridge -> handleIntent(delivered, bridge) },
+                onRecovery = { delivered ->
+                    if (delivered?.action in listOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE))
+                        Toast.makeText(this@MainActivity, "Check identity access, then share again from the source app.", Toast.LENGTH_LONG).show()
+                    shareInbox.dismiss()
+                })
             MyApplicationTheme {
-                MacBridgeApp(bridgeManager = bridgeManager, sharedFile = shareInbox.pending,
-                    onDismissShare = shareInbox::dismiss, onShareSent = shareInbox::sent)
+                when (val value = startup) {
+                    is IdentityStartup.Ready -> MacBridgeApp(bridgeManager = value.value, sharedFile = shareInbox.pending,
+                        onDismissShare = shareInbox::dismiss, onShareSent = shareInbox::sent)
+                    else -> IdentityRecoveryScreen((value as? IdentityStartup.Recovery)?.reason,
+                        onRetry = app::retryIdentity, onResetConfirmed = app::resetIdentityConfirmed)
+                }
             }
         }
     }
@@ -41,7 +58,9 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val app = application as MacBridgeApplication
-        handleIntent(intent, app.bridgeManager)
+        if (app.identityStartup.value is IdentityStartup.Recovery) {
+            Toast.makeText(this, "Check identity access, then share again from the source app.", Toast.LENGTH_LONG).show()
+        } else queuedIntent = intent
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -70,6 +89,19 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+}
+
+/** Deliver each intent once, including new shares received after startup is Ready. */
+@androidx.compose.runtime.Composable
+internal fun <T> StartupIntentEffect(startup: IdentityStartup<T>, pending: Intent?, onClear: () -> Unit,
+    onReady: (Intent, T) -> Unit, onRecovery: (Intent?) -> Unit) {
+    LaunchedEffect(startup, pending) {
+        when (startup) {
+            is IdentityStartup.Ready -> { onClear(); if (pending != null) onReady(pending, startup.value) }
+            is IdentityStartup.Recovery -> { onClear(); onRecovery(pending) }
+            IdentityStartup.Loading -> Unit
         }
     }
 }
