@@ -33,6 +33,9 @@ final class CompanionController: ObservableObject {
     private var connectionId = ""
     @Published private(set) var filesEnabled = UserDefaults.standard.bool(forKey: "filesEnabled")
     private var child: Process?
+    private var identityAccount: String?
+    private var identityAuthorization: Process?
+    @Published private(set) var canAuthorizeIdentity = false
     private var input: FileHandle?
     private var generation = 0
     private let commands = DispatchQueue(label: "MacBridge.commands")
@@ -69,7 +72,12 @@ final class CompanionController: ObservableObject {
         let stdin = Pipe()
         let stderr = Pipe()
         task.executableURL = URL(fileURLWithPath: python)
-        task.arguments = [script.path, "--gui"] + (clipboardEnabled ? ["--clipboard"] : []) + (filesEnabled ? ["--files"] : [])
+        let identityHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MacBridgeIdentity")
+        guard FileManager.default.isExecutableFile(atPath: identityHelper.path) else {
+            errorMessage = "The Keychain helper is missing. Reinstall MacBridge; your identity has not been changed."
+            return
+        }
+        task.arguments = [script.path, "--gui", "--identity-helper", identityHelper.path] + (clipboardEnabled ? ["--clipboard"] : []) + (filesEnabled ? ["--files"] : [])
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         environment["PYTHONUNBUFFERED"] = "1"
@@ -133,9 +141,16 @@ final class CompanionController: ObservableObject {
         if value.event == "notification" { alerts.receive(value); return }
         if value.event == "error" {
             errorMessage = value.message ?? "The companion could not complete that action."
+            if let account = value.identityAccount, account.utf8.count == 64,
+               account.allSatisfy({ "0123456789abcdef".contains($0) }) {
+                identityAccount = account
+                canAuthorizeIdentity = true
+            }
             return
         }
         guard value.event == "state" else { return }
+        identityAccount = nil
+        canAuthorizeIdentity = false
         bonjour.apply(value.running == true ? value.discovery : nil)
         update(\.running, value.running ?? false)
         update(\.connected, value.connected ?? false)
@@ -248,6 +263,58 @@ final class CompanionController: ObservableObject {
         NSPasteboard.general.setString(pairingURI, forType: .string)
         lastAction = "Pairing code copied — paste it in Android’s Devices screen"
     }
+    func authorizeIdentity() {
+        guard let account = identityAccount, identityAuthorization == nil else { return }
+        let authorization = Process()
+        let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+        guard let python = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
+              let script = Bundle.main.url(forResource: "macbridge", withExtension: "py") else {
+            errorMessage = "The companion runtime is missing. Reinstall MacBridge and try again."
+            return
+        }
+        authorization.executableURL = URL(fileURLWithPath: python)
+        authorization.arguments = [script.path, "--identity-helper",
+            Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MacBridgeIdentity").path,
+            "--authorize-identity", account]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PYTHONUNBUFFERED"] = "1"
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        authorization.environment = environment
+        authorization.standardInput = FileHandle.nullDevice
+        let diagnostics = Pipe()
+        authorization.standardOutput = diagnostics
+        authorization.standardError = FileHandle.nullDevice
+        let token = generation
+        authorization.terminationHandler = { [weak self] result in
+            let diagnostic = String(data: diagnostics.fileHandleForReading.readData(ofLength: 64), encoding: .utf8) ?? ""
+            let number = diagnostic.hasPrefix("KeychainStatus=") ? Int(diagnostic.dropFirst(15).trimmingCharacters(in: .whitespacesAndNewlines)) : nil
+            DispatchQueue.main.async {
+                guard let self, self.generation == token else { return }
+                self.identityAuthorization = nil
+                if result.terminationStatus == 0 {
+                    self.restart()
+                } else {
+                    self.canAuthorizeIdentity = true
+                    if result.terminationStatus == 7 {
+                        self.errorMessage = "Complete MacBridge Keychain Repair in Terminal. The Apple security tool requests the login-keychain password with hidden input. Then click Allow Keychain Access again to finish; close Terminal to cancel."
+                        return
+                    }
+                    self.errorMessage = result.terminationStatus == 3
+                        ? "Unlock the login keychain in Keychain Access, then restart to finish migration."
+                        : "Keychain approval could not finish" + (number.map { " (macOS status \($0))" } ?? "") + ". Review access for MacBridgeIdentity and restart."
+                }
+            }
+        }
+        do {
+            try authorization.run()
+            identityAuthorization = authorization
+            canAuthorizeIdentity = false
+            errorMessage = "Review access for the MacBridge identity item. A changed helper may first open MacBridge Keychain Repair in Terminal. macOS then requests approval to refresh this helper's trusted-app rule. Enter any password yourself; approve only MacBridgeIdentity for the MacBridge identity item."
+        } catch {
+            errorMessage = "Could not open Keychain approval. Reinstall MacBridge and try again."
+        }
+    }
     func restart() {
         let previous = child
         stop()
@@ -264,6 +331,10 @@ final class CompanionController: ObservableObject {
         alerts.configure(session: "", enabled: false)
         bonjour.stop()
         generation += 1
+        if identityAuthorization?.isRunning == true { identityAuthorization?.terminate() }
+        identityAuthorization = nil
+        identityAccount = nil
+        canAuthorizeIdentity = false
         let previous = child
         child = nil
         input?.closeFile()

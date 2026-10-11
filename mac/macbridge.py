@@ -22,6 +22,7 @@ from file_receiver import FileReceiver, RESUME_TTL_SECONDS
 from file_sender import FileSender
 from transfer_state import TransferState
 from bounded_json import load_object
+from identity_store import KeychainStore, IdentityStorageError, load_keychain_identity
 
 MAX_FRAME = 1024 * 1024
 
@@ -87,7 +88,7 @@ def verify_signature(public_key, signature, transcript):
 
 
 class Companion:
-    def __init__(self, directory, host='0.0.0.0', port=8990, echo=False, clipboard=False, event_sink=None, files=False):
+    def __init__(self, directory, host='0.0.0.0', port=8990, echo=False, clipboard=False, event_sink=None, files=False, identity_store=None):
         self.event_sink = event_sink
         self.notifications = False
         self.notification_mirror = NotificationMirror()
@@ -98,13 +99,22 @@ class Companion:
         self.directory.chmod(0o700)
         self.cert = self.directory / 'identity.crt'
         self.key = self.directory / 'identity.key'
+        if identity_store is None and (self.directory / 'identity-keychain.json').exists():
+            raise IdentityStorageError('This identity uses Keychain. Open the native MacBridge app; standalone CLI file fallback is disabled.')
+        if self.cert.is_symlink() or self.key.is_symlink():
+            raise IdentityStorageError('Unsafe identity file; startup stopped.')
         if not self.cert.exists() and not self.key.exists():
+            if identity_store is not None and any((self.directory / name).exists() for name in ('identity-keychain.json', 'device-id', 'peers.json')):
+                raise IdentityStorageError('Existing certificate is missing. Restore it; MacBridge will not create a replacement identity.')
             openssl('req', '-new', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
                     '-nodes', '-days', '365', '-subj', '/CN=MacBridge Development Peer',
                     '-keyout', str(self.key), '-out', str(self.cert))
-        if not self.cert.exists() or not self.key.exists():
+        if not self.cert.exists() or (identity_store is None and not self.key.exists()):
             raise ValueError('Incomplete Mac identity; restore both identity files')
-        self.key.chmod(0o600)
+        if self.key.exists():
+            if self.key.is_symlink():
+                raise IdentityStorageError('Unsafe identity file; startup stopped.')
+            self.key.chmod(0o600)
         self.cert.chmod(0o600)
         pem = openssl('x509', '-in', str(self.cert), '-pubkey', '-noout')
         self.public_key = openssl('pkey', '-pubin', '-outform', 'DER', input=pem)
@@ -170,7 +180,10 @@ class Companion:
         self.rotate_code()
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.minimum_version = ssl.TLSVersion.TLSv1_2
-        self.context.load_cert_chain(self.cert, self.key)
+        if identity_store is None:
+            self.context.load_cert_chain(self.cert, self.key)
+        else:
+            load_keychain_identity(self.directory, self.cert, self.public_key, self.context, identity_store)
         self.listener = create_listener(host, port)
         self.listener.settimeout(1)
         self.port = self.listener.getsockname()[1]
@@ -625,7 +638,40 @@ def main():
     parser.add_argument('--echo', action='store_true', help='Echo text for protocol testing without clipboard access')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--gui', action='store_true', help='JSON control channel for the native Mac app')
+    parser.add_argument('--identity-helper', help='Use the bundled native Keychain identity helper; never fall back to file storage')
+    parser.add_argument('--authorize-identity', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.authorize_identity is not None:
+        import re
+        import sys
+        if not args.identity_helper or re.fullmatch('[0-9a-f]{64}', args.authorize_identity) is None:
+            parser.error('Invalid Keychain authorization request')
+        # Match the startup caller chain. Approval never returns key bytes to the
+        # engine and does not create an identity, pairing code or network listener.
+        try:
+            import signal
+            request = subprocess.Popen([args.identity_helper, 'authorize', args.authorize_identity],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            def cancel_authorization(signum, frame):
+                raise SystemExit(4)
+            signal.signal(signal.SIGTERM, cancel_authorization)
+            try:
+                status = request.wait()
+                diagnostic = request.stderr.read(65)
+                if re.fullmatch(rb'KeychainStatus=(-?[0-9]{1,10})\n?', diagnostic):
+                    sys.stdout.buffer.write(diagnostic)
+                    sys.stdout.buffer.flush()
+            finally:
+                if request.poll() is None:
+                    request.terminate()
+                    try:
+                        request.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        request.kill()
+                        request.wait()
+        except OSError:
+            status = 4
+        sys.exit(status if status in (0, 3, 4, 6, 7) else 4)
     try:
         address = args.address or detect_address()
         ipaddress.ip_address(address)
@@ -636,7 +682,14 @@ def main():
     def emit(value):
         with output_lock:
             print(json.dumps(value, separators=(',', ':')), flush=True)
-    companion = Companion(args.state_dir, args.host, args.port, args.echo, args.clipboard, emit if args.gui else None, files=args.files)
+    try:
+        companion = Companion(args.state_dir, args.host, args.port, args.echo, args.clipboard, emit if args.gui else None,
+            files=args.files, identity_store=KeychainStore(args.identity_helper) if args.identity_helper else None)
+    except IdentityStorageError as error:
+        if args.gui:
+            emit({'event': 'error', 'message': str(error), 'identityAccount': error.account})
+            return
+        parser.error(str(error))
     companion.address = address
     if args.gui:
         companion.emit_state()

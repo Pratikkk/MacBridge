@@ -18,7 +18,7 @@ object SecurityBaselineAuditor {
         SecurityRule(3, "Pair Out of Band", "Pair before granting feature access.", true,
             "Mac code has a 256-bit secret, 5-minute expiry and single successful use. Android stores the pin only after authentication."),
         SecurityRule(4, "Keys Stay Put", "Production Android identity fails closed without Keystore.", false,
-            "Android uses Keystore with no software fallback by default. Development Mac keys use owner-only files; native Keychain storage remains to implement."),
+            "Android uses Keystore with no software fallback by default. The native Mac app migrates its private identity to Keychain; legacy CLI file storage and a fully native transport remain development limitations."),
         SecurityRule(5, "Treat Input as Hostile", "Bounded frames and filename sanitation are implemented.", false,
             "UTF-8 frames are limited to 1 MiB before parsing. Phone-to-Mac files are capped at 100 MB, ordered in 64 KB chunks and published only after size and SHA-256 verification. JSON parsing now caps nesting at 32, rejects duplicate fields and avoids scalar coercion. Repository review completed; independent assessment remains pending."),
         SecurityRule(6, "Least Privilege", "New peers start with all features disabled.", false,

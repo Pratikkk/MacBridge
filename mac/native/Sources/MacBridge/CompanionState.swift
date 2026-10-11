@@ -6,6 +6,7 @@ struct PairedPhone: Decodable, Identifiable, Equatable {
 }
 
 struct CompanionEvent: Decodable {
+    let identityAccount: String?
     let replyToken: String?
     let dismissToken: String?
     let status: String?

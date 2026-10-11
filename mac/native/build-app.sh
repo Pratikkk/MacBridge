@@ -13,6 +13,7 @@ cp ../file_receiver.py "$app_dir/Contents/Resources/file_receiver.py"
 cp ../transfer_state.py "$app_dir/Contents/Resources/transfer_state.py"
 cp ../bounded_json.py "$app_dir/Contents/Resources/bounded_json.py"
 cp ../notification_mirror.py "$app_dir/Contents/Resources/notification_mirror.py"
+cp ../identity_store.py "$app_dir/Contents/Resources/identity_store.py"
 cp ../macbridge.py "$app_dir/Contents/Resources/macbridge.py"
 cp ../../assets/branding/MacBridge.icns "$app_dir/Contents/Resources/MacBridge.icns"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
@@ -34,5 +35,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+cp "$output_dir/MacBridgeIdentity" "$app_dir/Contents/MacOS/MacBridgeIdentity.new"
+mv -f "$app_dir/Contents/MacOS/MacBridgeIdentity.new" "$app_dir/Contents/MacOS/MacBridgeIdentity"
+codesign --force --identifier com.macbridge.companion.identity-helper --sign - "$app_dir/Contents/MacOS/MacBridgeIdentity"
 codesign --force --sign - "$app_dir"
 printf 'Built %s\n' "$app_dir"

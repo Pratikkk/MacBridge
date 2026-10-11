@@ -235,6 +235,9 @@ struct CompanionSettingsView: View {
             Text(controller.errorMessage ?? controller.lastAction)
                 .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if controller.canAuthorizeIdentity {
+                Button("Allow Keychain Access…", action: controller.authorizeIdentity)
+            }
             Spacer()
             Button("Restart Companion", action: controller.restart)
         }.padding(20)

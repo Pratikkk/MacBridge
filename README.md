@@ -56,7 +56,7 @@ These checks cover identity and code rejection, Unicode, bounded and malformed f
 
 ## Remaining work
 
-The native UI still uses the tested Python TLS engine. Native Swift transport, Mac Keychain storage and independent security assessment remain planned. The scoped repository [security review](docs/security-review.md) records fixes and open release risks. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+The native UI still uses the tested Python TLS engine. The native Mac app now migrates its private identity into Keychain while preserving pairing. Native Swift transport and independent security assessment remain planned. The scoped repository [security review](docs/security-review.md) records fixes and open release risks. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
 
 ## Pair by QR
 
