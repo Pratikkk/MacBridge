@@ -33,6 +33,19 @@ struct CompanionChecks {
         if !value { throw Failure(message: message) }
     }
     @MainActor static func main() throws {
+        let cert = CertificatePresentation(starts: 1_700_000_000, expires: 1_800_000_000, status: "valid")
+        precondition(cert.canRenew && cert.label.hasPrefix("Expires "))
+        precondition(CertificatePresentation(starts: 1, expires: 2, status: "expired").label.contains("renew"))
+        precondition(CertificatePresentation(starts: 1, expires: 2, status: "notYetValid").label.contains("clocks"))
+        precondition(CertificatePresentation(starts: 1, expires: 2, status: "expiring").label.contains("soon"))
+        for value in [CertificatePresentation(starts: nil, expires: nil, status: nil),
+                      CertificatePresentation(starts: 2, expires: 1, status: "valid"),
+                      CertificatePresentation(starts: .nan, expires: 2, status: "valid"),
+                      CertificatePresentation(starts: 1, expires: 2, status: "unrecognized")] {
+            precondition(!value.canRenew && value.label == "Unavailable")
+        }
+        print("PASS: bounded certificate expiry presentation, renewal eligibility and recovery guidance")
+
         let loginService = RecordingLoginItem()
         let login = LoginItemController(service: loginService)
         try require(!login.requested && loginService.registrations == 0, "Login startup must not register itself")

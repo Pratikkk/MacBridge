@@ -33,9 +33,10 @@ The original review was validated against its isolated source snapshot, excludin
 
 Open work remains:
 
-- [#29: same-key certificate renewal](https://github.com/Pratikkk/MacBridge/issues/29). Mac certificates expire after one year; Android rejects expired/not-yet-valid certificates. Never disable validity checks or regenerate the identity as a workaround.
 - [#30: cumulative resource bounds](https://github.com/Pratikkk/MacBridge/issues/30). Per-frame/per-file limits do not provide a history/storage quota or sustained-message budget for a consenting authenticated peer.
 - [#13: native Swift transport](https://github.com/Pratikkk/MacBridge/issues/13), and [#16: signed/notarized distribution](https://github.com/Pratikkk/MacBridge/issues/16).
 - [#24: physical notification acceptance](https://github.com/Pratikkk/MacBridge/issues/24) and [#27: installed login/update acceptance](https://github.com/Pratikkk/MacBridge/issues/27). Automated checks do not establish actual system permission/banner behavior or login/update trust.
 
 This pass did not fuzz every parser, benchmark sustained abuse, independently audit dependencies/cryptographic implementations, simulate compromised OS accounts, or perform a public-release assessment. Open follow-ups prevent blanket release-readiness/security claims; the milestone remains open.
+
+Same-key Mac certificate renewal (#29) is separately validated and documented in [certificate renewal](certificate-renewal.md). Android still rejects invalid dates and changed pins.

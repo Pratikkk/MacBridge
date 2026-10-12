@@ -26,6 +26,7 @@ import com.example.ui.theme.*
 @Composable
 fun BridgeHomeScreen(bridgeManager: BridgeManager, onNavigateToPairing: () -> Unit,
     onNavigateToClipboard: () -> Unit, onNavigateToFiles: () -> Unit, modifier: Modifier = Modifier) {
+    val connectionError by bridgeManager.secureTransport.connectionError.collectAsStateWithLifecycle()
     val state by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
     val devices by bridgeManager.pairedDevices.collectAsStateWithLifecycle()
     val transfers by bridgeManager.homeFileTransfers.collectAsStateWithLifecycle()
@@ -39,7 +40,7 @@ fun BridgeHomeScreen(bridgeManager: BridgeManager, onNavigateToPairing: () -> Un
         onFiles = onNavigateToFiles, modifier = modifier, transfers = transfers,
         canResume = availability.canSend && !busy, savingId = actions.savingId,
         canSave = !actions.savePickerOpen && actions.savingId == null,
-        onResume = actions.resume, onCancel = actions.cancel, onSave = actions.save)
+        onResume = actions.resume, onCancel = actions.cancel, onSave = actions.save, connectionError = connectionError)
 }
 
 @Composable
@@ -47,7 +48,7 @@ fun HomeWorkspace(state: ConnectionState, devices: List<PairedDevice>, onConnect
     onDisconnect: () -> Unit, onClipboard: () -> Unit, onFiles: () -> Unit, modifier: Modifier = Modifier,
     transfers: List<FileTransferItem> = emptyList(), canResume: Boolean = false, savingId: String? = null,
     canSave: Boolean = true, onResume: (FileTransferItem) -> Unit = {},
-    onCancel: (FileTransferItem) -> Unit = {}, onSave: (FileTransferItem) -> Unit = {}) {
+    onCancel: (FileTransferItem) -> Unit = {}, onSave: (FileTransferItem) -> Unit = {}, connectionError: String? = null) {
     val visibleTransfers = remember(transfers) { homeTransfers(transfers) }
     val active = visibleTransfers.any { it.status in currentTransferStatuses }
     val transferSection: @Composable () -> Unit = {
@@ -67,6 +68,7 @@ fun HomeWorkspace(state: ConnectionState, devices: List<PairedDevice>, onConnect
         ScreenTitle("Home", "Your Mac. Your transfers.")
         if (active) transferSection()
         ConnectionHeroCard(state, devices, onConnect, onDisconnect)
+        if (connectionError != null) Text(connectionError, modifier = Modifier.testTag("certificate_connection_error"))
         if (!active) transferSection()
         if (devices.any { !it.isBlocked }) {
             Panel {

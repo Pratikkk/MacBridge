@@ -5,6 +5,8 @@ import SwiftUI
 @MainActor
 final class CompanionController: ObservableObject {
     static let shared = CompanionController()
+    @Published private(set) var certificate = CertificatePresentation(starts: nil, expires: nil, status: nil)
+    @Published private(set) var certificateRenewing = false
     @Published private(set) var running = false
     @Published private(set) var connected = false
     @Published private(set) var phoneName = "Android Phone"
@@ -93,6 +95,7 @@ final class CompanionController: ObservableObject {
                 self.bonjour.stop()
                 self.alerts.configure(session: "", enabled: false)
                 self.input = nil
+                self.certificateRenewing = false
                 self.running = false
                 self.connected = false
                 self.fileSending = false
@@ -140,6 +143,7 @@ final class CompanionController: ObservableObject {
     private func accept(_ value: CompanionEvent) {
         if value.event == "notification" { alerts.receive(value); return }
         if value.event == "error" {
+            certificateRenewing = false
             errorMessage = value.message ?? "The companion could not complete that action."
             if let account = value.identityAccount, account.utf8.count == 64,
                account.allSatisfy({ "0123456789abcdef".contains($0) }) {
@@ -149,6 +153,8 @@ final class CompanionController: ObservableObject {
             return
         }
         guard value.event == "state" else { return }
+        update(\.certificate, CertificatePresentation(starts: value.certificateStarts, expires: value.certificateExpires, status: value.certificateStatus))
+        update(\.certificateRenewing, value.certificateRenewing ?? false)
         identityAccount = nil
         canAuthorizeIdentity = false
         bonjour.apply(value.running == true ? value.discovery : nil)
@@ -191,6 +197,7 @@ final class CompanionController: ObservableObject {
             catch {
                 DispatchQueue.main.async {
                     guard let self, self.generation == token else { return }
+                    self.certificateRenewing = false
                     self.errorMessage = "Companion connection lost. Click Restart Companion."
                 }
             }
@@ -201,7 +208,12 @@ final class CompanionController: ObservableObject {
         UserDefaults.standard.set(enabled, forKey: "clipboardEnabled")
         command(["action": "setClipboardEnabled", "enabled": enabled])
     }
-    func refreshNotificationAccess() { alerts.refreshPermission() }
+    func refreshNotificationAccess() { alerts.refreshPermission(); if running { command(["action": "status"]) } }
+    func renewCertificate() {
+        guard running, !certificateRenewing, certificate.canRenew else { return }
+        certificateRenewing = true
+        command(["action": "renewCertificate"])
+    }
     func setNotifications(_ enabled: Bool) {
         notificationPermissionRequest += 1
         let request = notificationPermissionRequest
@@ -328,6 +340,7 @@ final class CompanionController: ObservableObject {
         }
     }
     func stop() {
+        certificateRenewing = false
         alerts.configure(session: "", enabled: false)
         bonjour.stop()
         generation += 1

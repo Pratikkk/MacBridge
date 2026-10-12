@@ -41,6 +41,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun DevicesPairingScreen(bridgeManager: BridgeManager, modifier: Modifier = Modifier) {
     val devices by bridgeManager.pairedDevices.collectAsStateWithLifecycle()
+    val connectionError by bridgeManager.secureTransport.connectionError.collectAsStateWithLifecycle()
     val state by bridgeManager.secureTransport.connectionState.collectAsStateWithLifecycle()
     val nearby by bridgeManager.nsdManager.discoveredPeers.collectAsStateWithLifecycle()
     val discoveryUnavailable by bridgeManager.nsdManager.discoveryUnavailable.collectAsStateWithLifecycle()
@@ -58,6 +59,7 @@ fun DevicesPairingScreen(bridgeManager: BridgeManager, modifier: Modifier = Modi
         if (status != null && success) item {
             Panel { Text(status!!, modifier = Modifier.testTag("pairing_success")) }
         }
+        if (connectionError != null) item { Text(connectionError!!) }
         if (devices.isNotEmpty()) item { Text("Your Macs", style = MaterialTheme.typography.titleLarge) }
         items(devices, key = { it.id }) { device ->
             val connected = (state as? ConnectionState.Connected)?.let { it.device.id == device.id && !it.isSimulated } == true

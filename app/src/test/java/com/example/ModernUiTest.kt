@@ -43,6 +43,17 @@ class ModernUiTest {
     private val mac = PairedDevice("mac1", "My Mac", "AB:".repeat(31) + "AB", "pin", "192.168.0.2", allowClipboard = true)
     private val connected = ConnectionState.Connected(mac, mac.lastKnownIp, mac.port)
 
+    @Test fun `certificate renewal guidance appears on Home without replacing saved Mac actions`() {
+        var error by mutableStateOf<String?>("The Mac certificate has expired. Renew it on the Mac, then connect again. Existing pairing stays saved.")
+        compose.setContent { MyApplicationTheme {
+            HomeWorkspace(ConnectionState.Disconnected, listOf(mac), {}, {}, {}, {}, connectionError = error)
+        } }
+        compose.onNodeWithTag("certificate_connection_error").assertIsDisplayed()
+        compose.onNodeWithTag("connect_button").assertExists()
+        compose.runOnIdle { error = null }
+        compose.onNodeWithTag("certificate_connection_error").assertDoesNotExist()
+    }
+
     @Test fun `notification previews start hidden and sharing is disabled for blocked Macs`() {
         var previews by mutableStateOf(false)
         compose.setContent { MyApplicationTheme { Column {

@@ -29,6 +29,8 @@ class SecureTransport(
         // Cleanup must still run if the app's connection scope was cancelled.
         private val socketCleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
+    private val error = MutableStateFlow<String?>(null)
+    val connectionError = error.asStateFlow()
     private val state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState = state.asStateFlow()
     private val lock = Any()
@@ -147,8 +149,11 @@ class SecureTransport(
                     catch (e: Exception) {
                         if (current(token)) DiagnosticLogger.w("Transport", "Connection failed: ${e.javaClass.simpleName}")
                         // Authentication failures must not be retried or downgraded.
-                        if (e is IllegalArgumentException || e is javax.net.ssl.SSLHandshakeException) {
-                            if (current(token)) state.value = ConnectionState.Disconnected
+                        if (e is IllegalArgumentException || e is javax.net.ssl.SSLHandshakeException || certificateValidityFailure(e) != null) {
+                            if (current(token)) {
+                                error.value = certificateValidityFailure(e)
+                                state.value = ConnectionState.Disconnected
+                            }
                             return@launch
                         }
                     } finally { connected?.let { clear(it, token) } }
@@ -227,6 +232,7 @@ class SecureTransport(
     }
 
     fun disconnect() {
+        error.value = null
         val sockets = synchronized(lock) {
             generation++
             connectJob?.cancel()

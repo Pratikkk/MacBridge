@@ -18,6 +18,18 @@ import java.io.ByteArrayOutputStream
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class SecurityProtocolTest {
+    @Test fun `certificate date failures preserve pairing and guide renewal or clocks without disclosing exception text`() {
+        for (cause in listOf(java.security.cert.CertificateExpiredException("PRIVATE_FIXTURE"),
+                             java.security.cert.CertificateNotYetValidException("PRIVATE_FIXTURE"))) {
+            val wrapped = javax.net.ssl.SSLHandshakeException("PRIVATE_FIXTURE").apply { initCause(cause) }
+            val message = PairingFailure.message(wrapped, null)
+            assertTrue(message.contains("MacBridge Settings"))
+            assertTrue(message.contains("pairing"))
+            assertFalse(message.contains("PRIVATE_FIXTURE"))
+            assertFalse(message.contains("fresh pairing code"))
+        }
+    }
+
     @Test
     fun `connection timeout explains the Mac endpoint and recovery steps`() {
         val message = PairingFailure.message(java.net.SocketTimeoutException("raw socket error"), "192.168.0.100:8990")

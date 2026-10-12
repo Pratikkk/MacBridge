@@ -22,7 +22,8 @@ from file_receiver import FileReceiver, RESUME_TTL_SECONDS
 from file_sender import FileSender
 from transfer_state import TransferState
 from bounded_json import load_object
-from identity_store import KeychainStore, IdentityStorageError, load_keychain_identity
+from identity_store import KeychainStore, IdentityStorageError, load_keychain_identity, read_legacy
+from certificate_store import certificate_info, read_certificate, renew_certificate
 
 MAX_FRAME = 1024 * 1024
 
@@ -90,6 +91,8 @@ def verify_signature(public_key, signature, transcript):
 class Companion:
     def __init__(self, directory, host='0.0.0.0', port=8990, echo=False, clipboard=False, event_sink=None, files=False, identity_store=None):
         self.event_sink = event_sink
+        self.identity_store = identity_store
+        self.certificate_renewing = False
         self.notifications = False
         self.notification_mirror = NotificationMirror()
         self.address = None
@@ -119,6 +122,7 @@ class Companion:
         pem = openssl('x509', '-in', str(self.cert), '-pubkey', '-noout')
         self.public_key = openssl('pkey', '-pubin', '-outform', 'DER', input=pem)
         self.pin = fingerprint(self.public_key)
+        self.certificate_info = certificate_info(read_certificate(self.cert))
         self.identity_file = self.directory / 'device-id'
         if not self.identity_file.exists():
             self.identity_file.write_text(str(uuid.uuid4()))
@@ -231,6 +235,8 @@ class Companion:
             remaining = max(0, self.secret_expires - time.monotonic())
             receiver = self.receiving_selection()
             value = dict(event='state', running=not self.stop_event.is_set(),
+                certificateStarts=self.certificate_info.starts, certificateExpires=self.certificate_info.expires,
+                certificateStatus=self.certificate_info.status(), certificateRenewing=self.certificate_renewing,
                 connected=self.active_id is not None,
                 phoneName=self.peers.get(self.active_id, {}).get('name', 'Android Phone'),
                 peers=[dict(id=key, name=peer.get('name', 'Android Phone')) for key, peer in sorted(self.peers.items())],
@@ -263,7 +269,9 @@ class Companion:
 
     def handle_command(self, command):
         action = command.get('action')
-        if action == 'pushClipboard':
+        if action == 'renewCertificate':
+            self.renew_certificate()
+        elif action == 'pushClipboard':
             self.push_clipboard()
         elif action == 'sendFile':
             path = command.get('path')
@@ -536,6 +544,26 @@ class Companion:
                 self.connections.add(raw)
             threading.Thread(target=self.handle, args=(raw,), daemon=True).start()
 
+    def renew_certificate(self):
+        if self.stop_event.is_set():
+            raise ValueError('Restart the companion before renewing its certificate')
+        self.certificate_renewing = True
+        self.emit_state()
+        try:
+            key = (self.identity_store.read(hashlib.sha256(self.public_key).hexdigest())
+                if self.identity_store is not None else read_legacy(self.key))
+            if key is None:
+                raise IdentityStorageError('Existing private identity is missing. Restore it; renewal cannot create a replacement.')
+            context, info = renew_certificate(self.cert, self.public_key, key,
+                permitted=lambda: not self.stop_event.is_set())
+            with self.lock:
+                self.context = context
+                self.certificate_info = info
+                self.last_action = 'Certificate renewed. Existing pairing preserved; reconnect if needed.'
+        finally:
+            self.certificate_renewing = False
+            self.emit_state()
+
     def start_file(self, path, connection_id):
         with self.lock:
             destination = self.active_stream
@@ -715,7 +743,7 @@ def main():
                     if not companion.handle_command(command):
                         break
                 except (ValueError, OSError, subprocess.SubprocessError) as error:
-                    emit(dict(event='error', message=str(error)))
+                    emit(dict(event='error', message=str(error), identityAccount=getattr(error, 'account', None)))
         elif args.headless:
             worker.join()
         else:

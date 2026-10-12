@@ -230,6 +230,12 @@ struct CompanionSettingsView: View {
                 phoneName: controller.phoneName).status)
             LabeledContent("Local address", value: controller.endpoint)
             LabeledContent("Nearby discovery", value: controller.discoveryStatus)
+            HStack {
+                LabeledContent("Certificate", value: controller.certificate.label)
+                Button(controller.certificateRenewing ? "Renewing…" : "Renew", action: controller.renewCertificate)
+                    .disabled(!controller.running || controller.certificateRenewing || !controller.certificate.canRenew)
+                    .help("Renew with the same key. Existing pairing and active transfers are preserved.")
+            }
             if controller.sending.visible { transferProgress("Sending to Phone", value: controller.sending) }
             if controller.receiving.visible { transferProgress("Receiving from Phone", value: controller.receiving) }
             Text(controller.errorMessage ?? controller.lastAction)

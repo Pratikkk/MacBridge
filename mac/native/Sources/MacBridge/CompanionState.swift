@@ -6,6 +6,10 @@ struct PairedPhone: Decodable, Identifiable, Equatable {
 }
 
 struct CompanionEvent: Decodable {
+    let certificateStarts: TimeInterval?
+    let certificateExpires: TimeInterval?
+    let certificateStatus: String?
+    let certificateRenewing: Bool?
     let identityAccount: String?
     let replyToken: String?
     let dismissToken: String?
@@ -133,5 +137,27 @@ struct TransferPresentation: Equatable {
     }
     private static func format(_ value: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: value, countStyle: .binary)
+    }
+}
+
+struct CertificatePresentation: Equatable {
+    let starts: TimeInterval?
+    let expires: TimeInterval?
+    let status: String?
+    var canRenew: Bool {
+        guard let starts, let expires, starts.isFinite, expires.isFinite,
+            starts > 0, expires > starts, expires < 32_503_680_000,
+            let status, ["valid", "expiring", "expired", "notYetValid"].contains(status) else { return false }
+        return true
+    }
+    var label: String {
+        guard canRenew, let expires else { return "Unavailable" }
+        let date = Date(timeIntervalSince1970: expires).formatted(date: .abbreviated, time: .omitted)
+        switch status {
+        case "expired": return "Expired — renew to reconnect"
+        case "notYetValid": return "Not yet valid — check device clocks"
+        case "expiring": return "Expires soon: " + date
+        default: return "Expires " + date
+        }
     }
 }

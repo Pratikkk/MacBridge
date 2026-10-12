@@ -74,7 +74,7 @@ The helper exchanges bounded key bytes through private pipes, never arguments or
 
 Legacy CLI/test identities without a migration record still use owner-only file storage. Use the native app for a migrated identity; the internal `--identity-helper` option is restricted to the app-managed engine and cannot export a migrated identity to a standalone CLI. Use a separate test state directory for legacy CLI experiments.
 
-Back up the Keychain identity and public state securely if you need identity recovery; the public files alone cannot restore the private key. The self-signed certificate expires after one year; there is no automatic certificate renewal yet. Do not delete or rotate the identity casually: existing pins will no longer match.
+Back up the Keychain identity and public state securely if you need identity recovery; the public files alone cannot restore the private key. The self-signed certificate expires after one year. Settings → General shows its expiry and provides same-key **Renew**; see [renewal behavior](../docs/certificate-renewal.md). Renewal is explicit, not unattended. Do not delete or rotate the identity casually: existing pins will no longer match.
 
 The Security screen lists implementation status and pending controls; it is not an independent security audit. Inherited Firebase initialization and broader abuse resistance remain unfinished.
 

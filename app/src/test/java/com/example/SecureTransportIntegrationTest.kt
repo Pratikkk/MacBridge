@@ -134,8 +134,22 @@ class SecureTransportIntegrationTest {
         } } finally { transport.stop(); scope.cancel() }
     }
 
+    @Test fun `old pairing code and pin authenticate after same key certificate renewal`() = withMac(renewed = true) { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val transport = SecureTransport(IdentityManager(context, true), scope, { _, _ -> }, {})
+        try {
+            val paired = runBlocking(Dispatchers.IO) { transport.pairDevice(code.device, code.secret) {} }
+            assertEquals(code.device.fingerprint, paired.fingerprint)
+            assertTrue(transport.connectionState.value is ConnectionState.Connected)
+            transport.connectToDevice(paired)
+            runBlocking { withTimeout(5000) { transport.connectionState.first { it is ConnectionState.Connected } } }
+            assertNull(transport.connectionError.value)
+        } finally { transport.stop(); scope.cancel() }
+    }
+
     private lateinit var peerDirectory: File
-    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, notifications: Boolean = false, dismiss: Boolean = false, reply: Boolean = false, test: (PairingCode) -> Unit) {
+    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, renewed: Boolean = false, notifications: Boolean = false, dismiss: Boolean = false, reply: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
         val directory = Files.createTempDirectory("macbridge-integration-").toFile()
@@ -182,7 +196,20 @@ class SecureTransportIntegrationTest {
             print('PAIRING_URI='+peer.pairing_uri('127.0.0.1'),flush=True)
             peer.serve()
         """.trimIndent()
-        val command = if (notifications) listOf("python3", "-u", "-c", notificationScript, File(root, "mac").absolutePath, directory.absolutePath, if (reply) "reply" else if (dismiss) "dismiss" else "normal")
+        val renewalScript = """
+            import sys
+            sys.path.insert(0,sys.argv[1])
+            from macbridge import Companion
+            peer=Companion(sys.argv[2],host='127.0.0.1',port=0,echo=True)
+            original_code=peer.pairing_uri('127.0.0.1')
+            original_identity=(peer.device_id,peer.pin,peer.public_key)
+            peer.renew_certificate()
+            assert original_identity == (peer.device_id,peer.pin,peer.public_key)
+            print('PAIRING_URI='+original_code,flush=True)
+            peer.serve()
+        """.trimIndent()
+        val command = if (renewed) listOf("python3", "-u", "-c", renewalScript, File(root, "mac").absolutePath, directory.absolutePath)
+            else if (notifications) listOf("python3", "-u", "-c", notificationScript, File(root, "mac").absolutePath, directory.absolutePath, if (reply) "reply" else if (dismiss) "dismiss" else "normal")
             else if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")
             else listOf("python3", File(root, "mac/macbridge.py").absolutePath,
                 "--state-dir", directory.absolutePath, "--host", "127.0.0.1", "--port", "0",
