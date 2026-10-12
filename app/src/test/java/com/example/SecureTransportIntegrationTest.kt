@@ -148,8 +148,28 @@ class SecureTransportIntegrationTest {
         } finally { transport.stop(); scope.cancel() }
     }
 
+    @Test fun `actual TLS clipboard flood stops work and automatic reconnect without resetting budget`() = withMac(flood = true) { code ->
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val delivered = java.util.concurrent.atomic.AtomicInteger()
+        val transport = SecureTransport(IdentityManager(context, true), scope, { _, _ -> delivered.incrementAndGet() }, {})
+        try { runBlocking(Dispatchers.IO) {
+            val paired = transport.pairDevice(code.device, code.secret) {}
+            withTimeout(5000) { transport.connectionError.first { it?.contains("request limit") == true } }
+            withTimeout(5000) { transport.connectionState.first { it is ConnectionState.Disconnected } }
+            val count = delivered.get()
+            assertTrue(count <= 10)
+            delay(100)
+            assertEquals(count, delivered.get())
+            assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
+            transport.connectToDevice(paired)
+            withTimeout(5000) { transport.connectionError.first { it?.contains("request limit") == true } }
+            assertTrue(delivered.get() <= count + 1)
+        } } finally { transport.stop(); scope.cancel() }
+    }
+
     private lateinit var peerDirectory: File
-    private fun withMac(files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, renewed: Boolean = false, notifications: Boolean = false, dismiss: Boolean = false, reply: Boolean = false, test: (PairingCode) -> Unit) {
+    private fun withMac(flood: Boolean = false, files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, renewed: Boolean = false, notifications: Boolean = false, dismiss: Boolean = false, reply: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
         val root = if (File(working, "mac/macbridge.py").exists()) working else working.parentFile
         val directory = Files.createTempDirectory("macbridge-integration-").toFile()
@@ -208,7 +228,25 @@ class SecureTransportIntegrationTest {
             print('PAIRING_URI='+original_code,flush=True)
             peer.serve()
         """.trimIndent()
-        val command = if (renewed) listOf("python3", "-u", "-c", renewalScript, File(root, "mac").absolutePath, directory.absolutePath)
+        val floodScript = """
+            import sys
+            sys.path.insert(0,sys.argv[1])
+            from macbridge import Companion,write_frame
+            peer=Companion(sys.argv[2],host='127.0.0.1',port=0,echo=True)
+            original=peer.report
+            def report(text):
+                original(text)
+                if text == 'Phone connected with verified identity':
+                    try:
+                        for i in range(20):
+                            write_frame(peer.active_stream,dict(type='CLIPBOARD',content='Fixture 世界',sourceDevice='Fixture',mimeType='text/plain',timestamp=i))
+                    except OSError: pass
+            peer.report=report
+            print('PAIRING_URI='+peer.pairing_uri('127.0.0.1'),flush=True)
+            peer.serve()
+        """.trimIndent()
+        val command = if (flood) listOf("python3", "-u", "-c", floodScript, File(root, "mac").absolutePath, directory.absolutePath)
+            else if (renewed) listOf("python3", "-u", "-c", renewalScript, File(root, "mac").absolutePath, directory.absolutePath)
             else if (notifications) listOf("python3", "-u", "-c", notificationScript, File(root, "mac").absolutePath, directory.absolutePath, if (reply) "reply" else if (dismiss) "dismiss" else "normal")
             else if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")
             else listOf("python3", File(root, "mac/macbridge.py").absolutePath,

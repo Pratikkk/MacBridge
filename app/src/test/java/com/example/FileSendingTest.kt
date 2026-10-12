@@ -32,12 +32,13 @@ class FileSendingTest {
         override fun getHomeTransfers() = getAllTransfers()
         override fun getAllTransfers(): Flow<List<FileTransferItem>> = flowOf(values.values.toList())
         override suspend fun getTransfer(transferId: String) = values[transferId]
-        override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }
+        override suspend fun insertRaw(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }
         override suspend fun deleteById(transferId: String) { values.remove(transferId) }
         override suspend fun failForIdentityReset() {
             values.replaceAll { _, item -> if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
                 item.copy(status = TransferStatus.FAILED) else item }
         }
+        override suspend fun prune() {}
         override suspend fun failInterruptedOutgoing() {}
         override suspend fun failInterruptedIncoming() {}
     }
@@ -75,7 +76,7 @@ class FileSendingTest {
                 is ProtocolMessage.FileInit -> {
                     waiting.complete(Unit)
                     if (response != "timeout") manager.handleAck(ProtocolMessage.FileAck(message.transferId, 0,
-                        if (response == "remote-cancel") "CANCELLED" else if (response == "reject") "REJECTED" else if (data.isEmpty()) "COMPLETED" else "READY",
+                        if (response == "storage-full") "STORAGE_FULL" else if (response == "remote-cancel") "CANCELLED" else if (response == "reject") "REJECTED" else if (data.isEmpty()) "COMPLETED" else "READY",
                         if (data.isEmpty()) message.sha256Checksum else null), if (response == "wrong-peer") "other" else "mac")
                 }
                 is ProtocolMessage.FileChunk -> {
@@ -104,6 +105,7 @@ class FileSendingTest {
             val succeeds = destinationMatches && !denied && targetAllowed && response == "valid" && !cancel && !oversizedStream && (reportedSize == null || reportedSize <= MAX_FILE_BYTES)
             val paused = !cancel && response in listOf("timeout", "wrong-peer", "disconnect")
             assertEquals(item.errorMessage, if (succeeds) TransferStatus.COMPLETED else if (paused) TransferStatus.PAUSED else TransferStatus.FAILED, item.status)
+            if (response == "storage-full") assertTrue(item.errorMessage!!.contains("storage is full"))
             if (maxWrites != null) assertTrue("Too many history writes: ${history.writes.size}", history.writes.size <= maxWrites)
             if (succeeds) { assertArrayEquals(data, received.toByteArray()); assertEquals(data.size.toLong(), item.transferredBytes) }
             if (!destinationMatches || !targetAllowed || denied || oversizedStream || reportedSize != null && reportedSize > MAX_FILE_BYTES) assertEquals(0, sent)
@@ -119,6 +121,8 @@ class FileSendingTest {
             if (denied) assertFalse(item.errorMessage.orEmpty().contains("private provider detail"))
         } finally { scope.cancel(); source.delete() }
     }
+    @Test fun `storage rejection explains quota and releases snapshot`() { scenario(byteArrayOf(1), response = "storage-full") }
+
     @Test fun `resume uses confirmed offset original snapshot and original Mac identity`() = resumeScenario(false)
     @Test fun `lost final acknowledgement resumes receipt without duplicate chunks`() = resumeScenario(true)
     @Test fun `corrupt private snapshot is discarded before any resume frame`() = resumeScenario(false, corrupt = true)

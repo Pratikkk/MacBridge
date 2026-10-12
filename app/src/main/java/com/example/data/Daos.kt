@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.Transaction
 import com.example.model.ClipboardItem
 import com.example.model.FileTransferItem
 import com.example.model.MirroredNotification
@@ -45,7 +46,13 @@ interface ClipboardDao {
     fun getAllClips(): Flow<List<ClipboardItem>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(item: ClipboardItem): Long
+    suspend fun insertRaw(item: ClipboardItem): Long
+
+    @Query("DELETE FROM clipboard_history WHERE length(CAST(content AS BLOB)) > 65536 OR id NOT IN (SELECT id FROM clipboard_history WHERE length(CAST(content AS BLOB)) <= 65536 ORDER BY timestamp DESC, id DESC LIMIT 100)")
+    suspend fun prune()
+
+    @Transaction
+    suspend fun insert(item: ClipboardItem): Long { val id = insertRaw(item); prune(); return id }
 
     @Query("DELETE FROM clipboard_history WHERE id = :id")
     suspend fun deleteById(id: Long)
@@ -75,7 +82,14 @@ interface FileTransferDao {
     suspend fun getTransfer(transferId: String): FileTransferItem?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertOrUpdate(transfer: FileTransferItem)
+    suspend fun insertRaw(transfer: FileTransferItem)
+
+    @Query("""DELETE FROM file_transfers WHERE status IN ('COMPLETED', 'FAILED') AND filePath IS NULL
+        AND transferId NOT IN (SELECT transferId FROM file_transfers WHERE status IN ('COMPLETED', 'FAILED') AND filePath IS NULL ORDER BY timestamp DESC, transferId DESC LIMIT 200)""")
+    suspend fun prune()
+
+    @Transaction
+    suspend fun insertOrUpdate(transfer: FileTransferItem) { insertRaw(transfer); prune() }
 
     @Query("UPDATE file_transfers SET status = 'FAILED', errorMessage = 'Interrupted. Choose the file to retry.' WHERE direction = 'OUTGOING' AND status IN ('PENDING', 'TRANSFERRING')")
     suspend fun failInterruptedOutgoing()
@@ -93,7 +107,13 @@ interface NotificationDao {
     fun getAllNotifications(): Flow<List<MirroredNotification>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(item: MirroredNotification)
+    suspend fun insertRaw(item: MirroredNotification)
+
+    @Query("DELETE FROM mirrored_notifications WHERE notificationId NOT IN (SELECT notificationId FROM mirrored_notifications ORDER BY timestamp DESC, notificationId DESC LIMIT 50)")
+    suspend fun prune()
+
+    @Transaction
+    suspend fun insert(item: MirroredNotification) { insertRaw(item); prune() }
 
     @Query("UPDATE mirrored_notifications SET isDismissed = 1 WHERE notificationId = :id")
     suspend fun markDismissed(id: String)

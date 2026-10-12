@@ -53,7 +53,7 @@ class UiPerformanceTest {
             dao.insertOrUpdate(paused.copy(status = TransferStatus.FAILED, errorMessage = "Cancelled"))
             dao.insertOrUpdate(sending.copy(status = TransferStatus.COMPLETED))
             assertEquals(listOf("sending", "receiving"), withTimeout(5_000) { dao.getHomeTransfers().first() }.map { it.transferId })
-            assertEquals(503, dao.getAllTransfers().first().size) // History/recovery remains intact.
+            assertEquals(200, dao.getAllTransfers().first().size) // Terminal history is bounded; actionable rows stay available.
         } finally { db.close() }
     }
 

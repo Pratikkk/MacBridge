@@ -116,6 +116,7 @@ struct CompanionSettingsView: View {
     @ObservedObject private var loginItem = LoginItemController.shared
     @State private var phoneToForget: PairedPhone?
     @State private var pairingQR = PairingQRCache()
+    @State private var storagePresented = false
 
     var body: some View {
         TabView(selection: $windows.selection) {
@@ -125,6 +126,7 @@ struct CompanionSettingsView: View {
             status.tabItem { Text("General") }.tag(CompanionSettingsTab.status)
         }
         .padding(20).frame(width: 500, height: 510)
+        .sheet(isPresented: $storagePresented) { storage.frame(width: 460, height: 380) }
         .confirmationDialog("Forget this phone?", isPresented: Binding(
             get: { phoneToForget != nil }, set: { if !$0 { phoneToForget = nil } }), titleVisibility: .visible) {
             Button("Forget Phone", role: .destructive) {
@@ -211,6 +213,26 @@ struct CompanionSettingsView: View {
             Spacer()
         }.padding(20)
     }
+    private var storage: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Received Files").font(.headline)
+                Spacer()
+                Button("Done") { storagePresented = false }.keyboardShortcut(.cancelAction)
+            }
+            Text(controller.storageUsed.map { "\($0 / (1024 * 1024)) MB used · \(controller.storageFiles ?? 0)/100 files" } ?? "Storage unavailable")
+            Picker("Limit", selection: Binding(get: { controller.storageLimit }, set: controller.setStorageLimit)) {
+                ForEach([250, 500, 1000], id: \.self) { value in
+                    Text("\(value) MB").tag(Int64(value) * 1024 * 1024)
+                }
+            }.disabled(!controller.running)
+            Text("New files are rejected when full. Move files you want to keep into another folder, or remove files yourself in Finder. Lowering the limit keeps existing files.").font(.callout)
+            Button("Open Received Files", action: controller.showReceivedFiles)
+            Text("The Mac keeps no clipboard or transfer history. Temporary transfer copies expire after 10 minutes; received files are never removed automatically.").font(.callout).foregroundStyle(.secondary)
+            Spacer()
+        }.padding(24).onAppear(perform: controller.refreshStorage)
+    }
+
     private var status: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("MacBridge").font(.headline)
@@ -245,7 +267,11 @@ struct CompanionSettingsView: View {
                 Button("Allow Keychain Access…", action: controller.authorizeIdentity)
             }
             Spacer()
-            Button("Restart Companion", action: controller.restart)
+            HStack {
+                Button("Storage…") { storagePresented = true }
+                Spacer()
+                Button("Restart Companion", action: controller.restart)
+            }
         }.padding(20)
     }
 }

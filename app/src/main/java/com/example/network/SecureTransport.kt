@@ -29,6 +29,7 @@ class SecureTransport(
         // Cleanup must still run if the app's connection scope was cancelled.
         private val socketCleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
+    private val workBudget = WorkBudget()
     private val error = MutableStateFlow<String?>(null)
     val connectionError = error.asStateFlow()
     private val state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -113,11 +114,15 @@ class SecureTransport(
             synchronized(lock) {
                 check(generation == token) { "Pairing cancelled" }
                 connectJob = scope.launch(Dispatchers.IO) {
+                    var retry = true
                     try { readSession(connected, token) }
-                    catch (e: Exception) { if (current(token)) DiagnosticLogger.w("Transport", "Connection ended: ${e.javaClass.simpleName}") }
+                    catch (e: Exception) {
+                        if (e is PeerRateLimit) { retry = false; if (current(token)) error.value = "Mac request limit exceeded. Wait before connecting again." }
+                        if (current(token)) DiagnosticLogger.w("Transport", "Connection ended: ${e.javaClass.simpleName}")
+                    }
                     finally {
                         clear(connected, token)
-                        if (current(token)) connectToDevice(connected.device)
+                        if (retry && current(token)) connectToDevice(connected.device)
                     }
                 }
             }
@@ -151,7 +156,7 @@ class SecureTransport(
                         // Authentication failures must not be retried or downgraded.
                         if (e is IllegalArgumentException || e is javax.net.ssl.SSLHandshakeException || certificateValidityFailure(e) != null) {
                             if (current(token)) {
-                                error.value = certificateValidityFailure(e)
+                                error.value = if (e is PeerRateLimit) "Mac request limit exceeded. Wait before connecting again." else certificateValidityFailure(e)
                                 state.value = ConnectionState.Disconnected
                             }
                             return@launch
@@ -190,8 +195,11 @@ class SecureTransport(
         }
         try {
             while (current(token)) {
-                val message = ProtocolCodec.decode(WireFrames.read(connected.input))
+                val frame = WireFrames.read(connected.input)
+                workBudget.frame(frame.toByteArray(Charsets.UTF_8).size)
+                val message = ProtocolCodec.decode(frame)
                     ?: throw IOException("Invalid protocol frame")
+                workBudget.message(message.type)
                 if (message is ProtocolMessage.Heartbeat) {
                     if (message.isAck) {
                         connected.lastAck = System.nanoTime()

@@ -239,7 +239,7 @@ class FileTransferManager(
                 if (ready.status == "COMPLETED") {
                     insist(offset == count && ready.sha256Checksum == checksum) { "Mac checksum verification failed." }
                 } else {
-                    insist(ready.status == "READY" && offset >= 0 && offset < count && offset % FILE_CHUNK_SIZE == 0L && (resumed != null || offset == 0L)) { "The Mac rejected this transfer." }
+                    insist(ready.status == "READY" && offset >= 0 && offset < count && offset % FILE_CHUNK_SIZE == 0L && (resumed != null || offset == 0L)) { if (ready.status == "STORAGE_FULL") "Mac received storage is full. Move files out of Received Files or raise its limit in Mac Settings → Storage." else "The Mac rejected this transfer." }
                 }
                 snapshot!!.inputStream().use { source ->
                     source.channel.position(offset)

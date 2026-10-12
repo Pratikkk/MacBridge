@@ -30,12 +30,13 @@ internal class TestFileHistory : FileTransferDao {
     override fun getHomeTransfers() = getAllTransfers()
     override fun getAllTransfers(): Flow<List<FileTransferItem>> = flowOf(values.values.toList())
     override suspend fun getTransfer(transferId: String) = values[transferId]
-    override suspend fun insertOrUpdate(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }
+    override suspend fun insertRaw(transfer: FileTransferItem) { values[transfer.transferId] = transfer; writes.add(transfer) }
     override suspend fun deleteById(transferId: String) { values.remove(transferId) }
     override suspend fun failForIdentityReset() {
         values.replaceAll { _, item -> if (item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING, TransferStatus.PAUSED))
             item.copy(status = TransferStatus.FAILED) else item }
     }
+    override suspend fun prune() {}
     override suspend fun failInterruptedOutgoing() {}
     override suspend fun failInterruptedIncoming() {
         values.replaceAll { _, item -> if (item.direction == TransferDirection.INCOMING && item.status in listOf(TransferStatus.PENDING, TransferStatus.TRANSFERRING))
@@ -95,6 +96,33 @@ class FileReceivingTest {
         val fixture = Fixture()
         try { fixture.block() } finally { fixture.close() }
     }
+    @Test fun `quota full rejects before creating partial and preserves existing received data`() = scenario {
+        folder.mkdirs()
+        val retained = File(folder, "retained.verified")
+        java.io.RandomAccessFile(retained, "rw").use { it.setLength(500 * MIB) }
+        start(byteArrayOf(1))
+        assertEquals("STORAGE_FULL", acks.last().status)
+        assertEquals(500 * MIB, retained.length())
+        assertTrue(folder.listFiles()!!.none { it.name.startsWith(".incoming-") })
+        retained.delete()
+        deliver(byteArrayOf(1), id = "retry")
+        assertEquals("COMPLETED", acks.last().status)
+    }
+
+    @Test fun `explicit received copy cleanup preserves Save As export and active transfer`() = scenario {
+        deliver(byteArrayOf(1, 2), id = "saved")
+        val export = destination(context)
+        assertTrue(manager.saveAs("incoming-saved", Uri.parse("content://save-tests/document/out")))
+        start(byteArrayOf(3), id = "active")
+        val orphan = File(folder, java.util.UUID.randomUUID().toString() + ".verified").apply { writeBytes(byteArrayOf(9)) }
+        assertEquals(2, manager.clearReceivedCopies())
+        assertFalse(orphan.exists())
+        assertArrayEquals(byteArrayOf(1, 2), export.readBytes())
+        assertTrue(folder.listFiles()!!.any { it.name.startsWith(".incoming-") })
+        assertNull(history.values["incoming-saved"])
+        assertNotNull(history.values["incoming-active"])
+    }
+
     private fun destination(context: Context, denied: Boolean = false): File {
         val file = File(context.cacheDir, "saved-test.bin").apply { delete() }
         val provider = Destination(file, denied)

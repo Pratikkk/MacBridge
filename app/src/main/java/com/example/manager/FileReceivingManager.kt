@@ -30,10 +30,12 @@ class FileReceivingManager(
     private val resumeWindowMs: Long = TRANSFER_RESUME_WINDOW_MS,
     private val progressClock: () -> Long = System::nanoTime
 ) {
-    private val folder = File(context.filesDir, "received_files")
+    val storage = StoragePolicy(context)
+    private val folder = storage.folder
     private val checkpoint = TransferCheckpoint(File(context.filesDir, "transfer_state/incoming.json"))
     private val checkpointUpdates = ProgressUpdates(progressClock)
     private val mutex = Mutex()
+    private val exports = Mutex()
     private data class Incoming(val id: String, var source: FileTransferTarget, var item: FileTransferItem,
         val temporary: File, val output: FileOutputStream, val digest: MessageDigest,
         val updates: ProgressUpdates, var index: Int = 0, var activity: Long = System.nanoTime())
@@ -235,7 +237,7 @@ class FileReceivingManager(
                     require(message.fileName.isNotEmpty() && message.fileName.length <= 256)
                     require(message.sha256Checksum.matches(Regex("[0-9a-f]{64}")))
                     if (history.getTransfer("incoming-$id") != null) { acknowledge("REJECTED"); return@withLock }
-                    require(folder.usableSpace >= message.fileSize + 8 * 1024 * 1024)
+                    storage.requireSpace(message.fileSize)
                     val name = safeName(message.fileName)
                     val temporary = File.createTempFile(".incoming-", ".part", folder)
                     val item = FileTransferItem("incoming-$id", name, message.fileSize,
@@ -269,6 +271,11 @@ class FileReceivingManager(
                 if (value.item.transferredBytes < value.item.fileSize && value.updates.due()) history.insertOrUpdate(value.item)
                 if (value.item.transferredBytes == value.item.fileSize) finish()
                 else { saveCheckpoint(force = false); acknowledge("IN_PROGRESS", value.item.transferredBytes) }
+            } catch (_: StorageFull) {
+                if (message is ProtocolMessage.FileInit) history.insertOrUpdate(FileTransferItem("incoming-$id", safeName(message.fileName), message.fileSize,
+                    direction = TransferDirection.INCOMING, status = TransferStatus.FAILED, sha256Checksum = message.sha256Checksum,
+                    errorMessage = "Received storage is full. Save and remove private copies, or raise the limit in Settings → Storage."))
+                acknowledge("STORAGE_FULL")
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 abort("Could not verify or store the file. Ask your Mac to send it again.")
@@ -335,40 +342,68 @@ class FileReceivingManager(
         }
     }
 
-    suspend fun saveAs(transferId: String, uri: Uri): Boolean = withContext(Dispatchers.IO) {
-        var outputOpened = false
-        try {
-            require(uri.scheme == "content")
-            val item = history.getTransfer(transferId) ?: return@withContext false
-            require(item.direction == TransferDirection.INCOMING && item.status == TransferStatus.COMPLETED)
-            val file = File(item.filePath ?: return@withContext false)
-            require(file.canonicalFile.parentFile == folder.canonicalFile && file.name.endsWith(".verified"))
-            require(file.isFile && file.length() == item.fileSize)
-            val digest = MessageDigest.getInstance("SHA-256")
-            file.inputStream().use { input ->
-                context.contentResolver.openOutputStream(uri, "wt")?.use { output ->
-                    outputOpened = true
-                    val buffer = ByteArray(FILE_CHUNK_SIZE)
-                    var total = 0L
-                    while (true) {
-                        ensureActive()
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        require(total <= item.fileSize)
-                        digest.update(buffer, 0, count)
-                        output.write(buffer, 0, count)
+    suspend fun clearReceivedCopies(): Int = withContext(Dispatchers.IO) {
+        initialized.await()
+        exports.withLock { mutex.withLock {
+            var removed = 0
+            history.getAllTransfers().first().filter { it.direction == TransferDirection.INCOMING && it.status == TransferStatus.COMPLETED }.forEach { item ->
+                val path = item.filePath?.let(::File)
+                if (path != null && path.canonicalFile.parentFile == folder.canonicalFile && path.name.matches(Regex("[a-f0-9-]{36}\\.verified")) && path.canonicalFile == File(folder.canonicalFile, path.name)) {
+                    if (!path.exists() || path.delete()) {
+                        history.deleteById(item.transferId)
+                        val id = item.transferId.removePrefix("incoming-")
+                        receipts.remove(id); receiptDetails.remove(id)
+                        removed++
                     }
-                    require(total == item.fileSize)
-                    require(digest.digest().joinToString("") { "%02x".format(it) } == item.sha256Checksum)
-                    output.flush()
-                } ?: return@withContext false
+                }
             }
-            true
-        } catch (error: Exception) {
-            if (outputOpened) runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }
-            if (error is CancellationException) throw error
-            false
+            // A crash after verified publication can leave a copy without a history row.
+            // The user-approved cleanup covers only generated private verified names.
+            folder.listFiles()?.filter { it.name.matches(Regex("[a-f0-9-]{36}\\.verified")) && it.canonicalFile == File(folder.canonicalFile, it.name) && it.isFile }?.forEach {
+                if (it.delete()) removed++
+            }
+            saveCheckpoint()
+            removed
+        } }
+    }
+
+    suspend fun saveAs(transferId: String, uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        initialized.await()
+        exports.withLock {
+            var outputOpened = false
+            try {
+                require(uri.scheme == "content")
+                val item = history.getTransfer(transferId) ?: return@withLock false
+                require(item.direction == TransferDirection.INCOMING && item.status == TransferStatus.COMPLETED)
+                val file = File(item.filePath ?: return@withLock false)
+                require(file.canonicalFile.parentFile == folder.canonicalFile && file.name.endsWith(".verified"))
+                require(file.isFile && file.length() == item.fileSize)
+                val digest = MessageDigest.getInstance("SHA-256")
+                file.inputStream().use { input ->
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { output ->
+                        outputOpened = true
+                        val buffer = ByteArray(FILE_CHUNK_SIZE)
+                        var total = 0L
+                        while (true) {
+                            ensureActive()
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= item.fileSize)
+                            digest.update(buffer, 0, count)
+                            output.write(buffer, 0, count)
+                        }
+                        require(total == item.fileSize)
+                        require(digest.digest().joinToString("") { "%02x".format(it) } == item.sha256Checksum)
+                        output.flush()
+                    } ?: return@withLock false
+                }
+                true
+            } catch (error: Exception) {
+                if (outputOpened) runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }
+                if (error is CancellationException) throw error
+                false
+            }
         }
     }
 }

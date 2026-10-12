@@ -81,6 +81,7 @@ class ClipboardSyncManager(
         send: (ProtocolMessage) -> Boolean = sendProtocolMessage
     ): TextSendResult {
         if (text.isNullOrBlank()) return TextSendResult.EMPTY_TEXT
+        if (text.toByteArray(Charsets.UTF_8).size > 65536) return TextSendResult.SEND_FAILED
         return try {
             val msg = ProtocolMessage.ClipboardSync(
                 content = text,
@@ -108,6 +109,7 @@ class ClipboardSyncManager(
     }
 
     fun handleIncomingClipboardFromMac(msg: ProtocolMessage.ClipboardSync) {
+        if (msg.content.toByteArray(Charsets.UTF_8).size > 65536) return
         scope.launch(Dispatchers.Main) {
             try {
                 lastSyncedHash = msg.content.hashCode()

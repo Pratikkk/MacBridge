@@ -5,6 +5,9 @@ import SwiftUI
 @MainActor
 final class CompanionController: ObservableObject {
     static let shared = CompanionController()
+    @Published private(set) var storageUsed: Int64?
+    @Published private(set) var storageFiles: Int?
+    @Published private(set) var storageLimit: Int64 = 500 * 1024 * 1024
     @Published private(set) var certificate = CertificatePresentation(starts: nil, expires: nil, status: nil)
     @Published private(set) var certificateRenewing = false
     @Published private(set) var running = false
@@ -153,6 +156,9 @@ final class CompanionController: ObservableObject {
             return
         }
         guard value.event == "state" else { return }
+        update(\.storageUsed, value.storageUsed)
+        update(\.storageFiles, value.storageFiles)
+        if let limit = value.storageLimit, [250, 500, 1000].map({ Int64($0) * 1024 * 1024 }).contains(limit) { update(\.storageLimit, limit) }
         update(\.certificate, CertificatePresentation(starts: value.certificateStarts, expires: value.certificateExpires, status: value.certificateStatus))
         update(\.certificateRenewing, value.certificateRenewing ?? false)
         identityAccount = nil
@@ -208,7 +214,9 @@ final class CompanionController: ObservableObject {
         UserDefaults.standard.set(enabled, forKey: "clipboardEnabled")
         command(["action": "setClipboardEnabled", "enabled": enabled])
     }
-    func refreshNotificationAccess() { alerts.refreshPermission(); if running { command(["action": "status"]) } }
+    func refreshNotificationAccess() { alerts.refreshPermission(); if running { command(["action": "storageStatus"]) } }
+    func setStorageLimit(_ value: Int64) { command(["action": "setStorageLimit", "bytes": value]) }
+    func refreshStorage() { command(["action": "storageStatus"]) }
     func renewCertificate() {
         guard running, !certificateRenewing, certificate.canRenew else { return }
         certificateRenewing = true

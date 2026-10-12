@@ -9,6 +9,7 @@ import tempfile
 import uuid
 import time
 from transfer_state import private_file, file_digest, metadata
+from resource_limits import StorageLimit
 
 CHUNK_SIZE = 65536
 RESUME_TTL_SECONDS = 600
@@ -16,8 +17,10 @@ MAX_FILE_SIZE = 100 * 1024 * 1024
 
 
 class FileReceiver:
-    def __init__(self, directory, state=None):
+    def __init__(self, directory, state=None, quota=None, reservations=lambda: 0):
         self.directory = Path(directory)
+        self.quota = quota
+        self.reservations = reservations
         self.active = None
         self.last_saved = None
         self.completed = {}
@@ -225,8 +228,9 @@ class FileReceiver:
                 if self.directory.is_symlink():
                     raise ValueError('Invalid receive directory')
                 self.directory.chmod(0o700)
+                if self.quota: self.quota.require_space(size, self.reservations())
                 if shutil.disk_usage(self.directory).free < size + 8 * 1024 * 1024:
-                    raise OSError('Insufficient free space')
+                    raise StorageLimit('Insufficient free space')
                 stream = tempfile.NamedTemporaryFile(prefix='.incoming-', dir=self.directory, delete=False)
                 os.chmod(stream.name, 0o600)
                 self.active = dict(id=transfer_id, name=name, size=size, checksum=digest, offset=0, index=0,
@@ -263,6 +267,9 @@ class FileReceiver:
             self.deadline = time.time() + RESUME_TTL_SECONDS
             self.checkpoint(force=False)
             return self.ack(transfer_id, 'IN_PROGRESS', value['offset'])
+        except StorageLimit:
+            self.result = 'storage_full'
+            return self.ack(transfer_id, 'STORAGE_FULL')
         except (ValueError, OSError, TypeError):
             self.abort()
             self.result = "failed"

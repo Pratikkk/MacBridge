@@ -23,6 +23,7 @@ from file_sender import FileSender
 from transfer_state import TransferState
 from bounded_json import load_object
 from identity_store import KeychainStore, IdentityStorageError, load_keychain_identity, read_legacy
+from resource_limits import ReceiveQuota, WorkBudget, StorageLimit, RateLimited
 from certificate_store import certificate_info, read_certificate, renew_certificate
 
 MAX_FRAME = 1024 * 1024
@@ -54,10 +55,11 @@ def fingerprint(key):
     return ':'.join(f'{byte:02X}' for byte in hashlib.sha256(key).digest())
 
 
-def read_frame(stream):
+def read_frame(stream, budget=None):
     line = stream.readline(MAX_FRAME + 2)
     if not line or not line.endswith(b'\n') or len(line) > MAX_FRAME + 1:
         raise ValueError('Missing or oversized frame')
+    if budget: budget.frame(len(line))
     return load_object(line.decode('utf-8'))
 
 
@@ -141,6 +143,9 @@ class Companion:
         self.last_receiver = None
         self.next_receive_report = 0
         self.receive_report_key = None
+        self.quota = ReceiveQuota(self.directory / 'ReceivedFiles', self.directory / 'storage.json')
+        self.work_budget = WorkBudget()
+        self.storage_snapshot = self.storage_usage()
         self.transfer_state = self.directory / 'TransferState'
         sender_path = self.transfer_state / 'sender.json'
         try:
@@ -156,7 +161,7 @@ class Companion:
             identity = (peer_id, peer.get('publicKey'))
             state = self.receiver_state(identity)
             if self.files and state.path.exists() and len(self.peer_receivers) < 4:
-                self.peer_receivers[identity] = FileReceiver(self.directory / 'ReceivedFiles', state=state)
+                self.peer_receivers[identity] = FileReceiver(self.directory / 'ReceivedFiles', state=state, quota=self.quota, reservations=self.receive_reservations)
         allowed_states = {r.state.path for r in self.peer_receivers.values()}
         if self.transfer_state.exists() and not self.transfer_state.is_symlink():
             for stale in self.transfer_state.glob('receiver-*.json'):
@@ -193,6 +198,13 @@ class Companion:
         self.port = self.listener.getsockname()[1]
         self.slots = threading.BoundedSemaphore(4)
         self.connections = set()
+
+    def receive_reservations(self):
+        return sum(max(0, r.active['size'] - r.active['offset']) for r in self.peer_receivers.values() if r.active)
+
+    def storage_usage(self):
+        try: return self.quota.usage()
+        except (OSError, StorageLimit): return None, None
 
     def receiver_state(self, identity):
         binding = [self.device_id, self.pin, *identity]
@@ -234,7 +246,8 @@ class Companion:
         with self.lock:
             remaining = max(0, self.secret_expires - time.monotonic())
             receiver = self.receiving_selection()
-            value = dict(event='state', running=not self.stop_event.is_set(),
+            used, count = getattr(self, 'storage_snapshot', (None, None))
+            value = dict(storageUsed=used, storageFiles=count, storageLimit=self.quota.limit, event='state', running=not self.stop_event.is_set(),
                 certificateStarts=self.certificate_info.starts, certificateExpires=self.certificate_info.expires,
                 certificateStatus=self.certificate_info.status(), certificateRenewing=self.certificate_renewing,
                 connected=self.active_id is not None,
@@ -269,7 +282,13 @@ class Companion:
 
     def handle_command(self, command):
         action = command.get('action')
-        if action == 'renewCertificate':
+        if action == 'setStorageLimit':
+            self.quota.set_limit(command.get('bytes'))
+            self.report('Received storage limit updated. Existing files retained.')
+        elif action == 'storageStatus':
+            self.storage_snapshot = self.storage_usage()
+            self.emit_state()
+        elif action == 'renewCertificate':
             self.renew_certificate()
         elif action == 'pushClipboard':
             self.push_clipboard()
@@ -448,13 +467,14 @@ class Companion:
                         if len(self.peer_receivers) >= 4:
                             _, old = self.peer_receivers.popitem()
                             old.discard()
-                        receiver = FileReceiver(self.directory / "ReceivedFiles", state=self.receiver_state(identity))
+                        receiver = FileReceiver(self.directory / "ReceivedFiles", state=self.receiver_state(identity), quota=self.quota, reservations=self.receive_reservations)
                         self.peer_receivers[identity] = receiver
                     self.receivers.add(receiver)
                 secure.settimeout(45)
                 self.report('Phone connected with verified identity')
                 while not self.stop_event.is_set():
-                    message = read_frame(stream)
+                    message = read_frame(stream, self.work_budget)
+                    self.work_budget.message(message.get('type'))
                     with self.lock:
                         if self.active_socket is not secure:
                             break
@@ -464,8 +484,11 @@ class Companion:
                             if self.sender and identity == self.sender_peer:
                                 self.sender.handle_ack(message)
                         elif message.get('type') in ('FILE_INIT', 'FILE_CHUNK', 'FILE_CANCEL'):
+                            had_active = receiver.active is not None
                             ack = receiver.process(message, self.files)
                             write_frame(stream, ack)
+                            if message.get('type') == 'FILE_INIT' or had_active and receiver.active is None:
+                                self.storage_snapshot = self.storage_usage()
                             self.receive_progress(receiver)
                         elif message.get('type') in ('NOTIFICATION', 'NOTIFICATION_ACTION'):
                             for event in self.notification_mirror.process(message, self.notifications):
@@ -473,7 +496,7 @@ class Companion:
                                     self.event_sink(dict(event='notification', connectionId=self.connection_id, **event))
                         elif message.get('type') == 'CLIPBOARD':
                             text = message.get('content')
-                            if not isinstance(text, str) or message.get('mimeType') != 'text/plain':
+                            if not isinstance(text, str) or len(text.encode('utf-8')) > 65536 or message.get('mimeType') != 'text/plain':
                                 raise ValueError('Invalid clipboard payload')
                             if self.clipboard:
                                 subprocess.run(['pbcopy'], input=text.encode('utf-8'), check=True, timeout=5)
@@ -489,7 +512,7 @@ class Companion:
                 stream.close()
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             # Never print pairing secrets, message contents or proofs.
-            self.report(f'Connection closed ({type(error).__name__})')
+            self.report('Peer request limit exceeded. Wait before reconnecting.' if isinstance(error, RateLimited) else f'Connection closed ({type(error).__name__})')
         finally:
             with self.lock:
                 if receiver is not None:
@@ -520,7 +543,7 @@ class Companion:
             self.receive_report_key = key
             self.next_receive_report = now + .25
             self.report('File received and verified. Open Received Files to view it.' if receiver.result == 'completed' else
-                'Receiving file from phone' if receiver.result == 'receiving' else 'File receiving ' + receiver.result)
+                'Received storage is full. Move files out of Received Files or raise the limit in Settings → Storage.' if receiver.result == 'storage_full' else 'Receiving file from phone' if receiver.result == 'receiving' else 'File receiving ' + receiver.result)
 
     def expire_transfers(self):
         with self.lock:
@@ -608,6 +631,8 @@ class Companion:
             if destination is None:
                 raise ValueError('No authenticated phone connection')
         text = subprocess.run(['pbpaste'], capture_output=True, check=True, timeout=5).stdout.decode('utf-8')
+        if len(text.encode('utf-8')) > 65536:
+            raise ValueError('Clipboard text must be 64 KiB or smaller. Share large content as a file.')
         with self.lock:
             if self.active_stream is not destination or not self.clipboard:
                 raise ValueError('Phone connection or clipboard permission changed; try again')

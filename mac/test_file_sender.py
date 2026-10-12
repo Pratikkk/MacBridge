@@ -34,7 +34,7 @@ class FileSenderTests(unittest.TestCase):
                 if behavior == 'disconnect':
                     raise OSError('private path detail')
                 ack = dict(type='FILE_ACK', transferId=frame['transferId'], receivedBytes=0,
-                    status='CANCELLED' if behavior == 'remote-cancel' else 'REJECTED' if behavior == 'reject' else ('READY' if data else 'COMPLETED'))
+                    status='STORAGE_FULL' if behavior == 'storage-full' else 'CANCELLED' if behavior == 'remote-cancel' else 'REJECTED' if behavior == 'reject' else ('READY' if data else 'COMPLETED'))
                 if not data:
                     ack['sha256Checksum'] = frame['sha256Checksum']
                 if behavior == 'wrong-id':
@@ -55,6 +55,7 @@ class FileSenderTests(unittest.TestCase):
         if paused:
             self.assertEqual(sender.result, 'paused')
             self.assertFalse(any(frame['type'] == 'FILE_CANCEL' for frame in frames))
+        if behavior == 'storage-full': self.assertIn('storage is full', statuses[-1])
         success = behavior == 'valid'
         self.assertEqual('received and verified' in statuses[-1], success)
         if success:
@@ -62,11 +63,14 @@ class FileSenderTests(unittest.TestCase):
             self.assertEqual(sender.sent_bytes, len(data))
         elif not paused:
             self.assertEqual(frames[-1]['type'], 'FILE_CANCEL')
-        self.assertTrue(all(name not in status and 'private' not in status for status in statuses))
+        self.assertTrue(all(name not in status and 'private path detail' not in status for status in statuses))
         if paused:
             sender.cancel()
             self.assertEqual(list((self.root / "spool").glob(".outgoing-*")), [])
         return frames
+
+    def test_storage_rejection_explains_quota_and_releases_snapshot(self):
+        self.scenario(behavior='storage-full')
 
     def test_multichunk_unicode_exact_delivery(self):
         frames = self.scenario(bytes(range(256)) * 400)

@@ -25,11 +25,12 @@ class ClipboardSharingTest {
     private class History : ClipboardDao {
         val items = mutableListOf<ClipboardItem>()
         override fun getAllClips(): Flow<List<ClipboardItem>> = flowOf(items)
-        override suspend fun insert(item: ClipboardItem): Long {
+        override suspend fun insertRaw(item: ClipboardItem): Long {
             items.add(item)
             return items.size.toLong()
         }
         override suspend fun deleteById(id: Long) = Unit
+        override suspend fun prune() {}
         override suspend fun clearAll() { items.clear() }
     }
 

@@ -6,6 +6,9 @@ struct PairedPhone: Decodable, Identifiable, Equatable {
 }
 
 struct CompanionEvent: Decodable {
+    let storageUsed: Int64?
+    let storageFiles: Int?
+    let storageLimit: Int64?
     let certificateStarts: TimeInterval?
     let certificateExpires: TimeInterval?
     let certificateStatus: String?

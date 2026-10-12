@@ -103,7 +103,7 @@ class FileReceiverTests(unittest.TestCase):
     def test_disk_failure_is_safe_and_retry_works(self):
         with patch('file_receiver.shutil.disk_usage') as usage:
             usage.return_value.free=0
-            self.assertEqual('FAILED', self.receiver.process(self.init(b'x'), True)['status'])
+            self.assertEqual('STORAGE_FULL', self.receiver.process(self.init(b'x'), True)['status'])
         self.assertFalse(self.files())
         self.assertEqual('READY', self.receiver.process(self.init(b'x'), True)['status'])
     def test_wrong_transfer_cannot_append_to_active_file(self):

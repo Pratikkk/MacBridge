@@ -182,6 +182,14 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(key, self.server.peers['phone']['publicKey'])
         self.assertEqual('Test Phone', self.server.peers['phone']['name'])
 
+    def test_oversized_local_clipboard_does_not_send_or_expose_content(self):
+        self.server.clipboard = True
+        self.server.active_stream = io.BytesIO()
+        with patch('macbridge.subprocess.run') as process:
+            process.return_value.stdout = ('世界' * 22000).encode()
+            with self.assertRaisesRegex(ValueError, '64 KiB'): self.server.push_clipboard()
+        self.assertEqual(self.server.active_stream.getvalue(), b'')
+
     def test_paused_or_disconnected_clipboard_does_not_read_pasteboard(self):
         with patch('macbridge.subprocess.run') as process:
             with self.assertRaises(ValueError):

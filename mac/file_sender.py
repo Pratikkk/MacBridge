@@ -150,6 +150,7 @@ class FileSender:
     def run(self, path):
         temporary = self.snapshot if path is None else None
         offered = complete = paused = False
+        storage_full = False
         try:
             self.check()
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -205,6 +206,7 @@ class FileSender:
             self.check()
             if not isinstance(ack, dict) or type(ack.get('receivedBytes')) is not int:
                 raise ValueError('Invalid acknowledgement')
+            storage_full = ack.get('status') == 'STORAGE_FULL'
             offset = ack['receivedBytes']
             if ack.get('status') == 'COMPLETED' and offset == self.file_size and ack.get('sha256Checksum') == checksum:
                 self.sent_bytes = offset
@@ -263,5 +265,5 @@ class FileSender:
             self.result = 'paused' if paused else ('completed' if complete else ('cancelled' if self.cancelled.is_set() else 'failed'))
             self.busy = False
             self.report('File received and verified by phone. Use Share → Files → Save As on Android.' if complete else
-                ('Transfer paused. Reconnect the same phone and choose Resume File Sending within 10 minutes.' if paused else 'File sending cancelled' if self.cancelled.is_set() else 'File not confirmed. Check connection, file access, free space and Android File sharing, then try again.'))
+                ('Phone received storage is full. Save and remove private copies or raise the limit in Android Settings → Storage.' if storage_full else 'Transfer paused. Reconnect the same phone and choose Resume File Sending within 10 minutes.' if paused else 'File sending cancelled' if self.cancelled.is_set() else 'File not confirmed. Check connection, file access, free space and Android File sharing, then try again.'))
             self.finished.set()

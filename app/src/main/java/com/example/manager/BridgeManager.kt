@@ -81,7 +81,14 @@ class BridgeManager(
             sent
         }) }
 
-    init { initSubsystems() }
+    init {
+        initSubsystems()
+        scope.launch(Dispatchers.IO) {
+            database.clipboardDao().prune()
+            database.fileTransferDao().prune()
+            database.notificationDao().prune()
+        }
+    }
 
 
     private fun initSubsystems() {
