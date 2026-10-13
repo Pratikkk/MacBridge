@@ -76,18 +76,16 @@ class InstallationTests(unittest.TestCase):
                 install(self.source, self.destination)
         self.assertEqual((target / "Contents/MacOS/MacBridge").read_text(), "old")
 
-    def test_missing_python_is_reported(self):
-        with patch("install_app.os.access", return_value=False):
-            with self.assertRaisesRegex(ValueError, "Python 3 is required"):
-                runtime_check()
+    def test_older_or_unknown_macos_is_rejected(self):
+        for version in ["13.7", "14.8", "", "unknown"]:
+            with self.subTest(version=version), patch("install_app.platform.mac_ver", return_value=(version, (), "")):
+                with self.assertRaisesRegex(ValueError, "macOS 15"):
+                    runtime_check()
 
-    def test_missing_openssl_is_reported_after_python_passes(self):
-        import subprocess
-        outcomes = [subprocess.CompletedProcess([], 0), subprocess.CalledProcessError(1, "openssl")]
-        with patch("install_app.subprocess.run", side_effect=outcomes):
-            with self.assertRaises(subprocess.CalledProcessError) as failed:
-                runtime_check()
-        self.assertEqual(failed.exception.cmd, "openssl")
+    def test_native_runtime_does_not_require_python_or_openssl(self):
+        with patch("install_app.platform.mac_ver", return_value=("15.8.1", (), "")), patch("install_app.os.access", return_value=False), patch("install_app.subprocess.run") as commands:
+            runtime_check()
+            commands.assert_not_called()
 
 
 if __name__ == "__main__":

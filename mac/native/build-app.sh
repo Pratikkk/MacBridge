@@ -8,15 +8,14 @@ mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 # Replace the inode rather than truncating an executable that may still be running.
 cp "$output_dir/MacBridge" "$app_dir/Contents/MacOS/MacBridge.new"
 mv -f "$app_dir/Contents/MacOS/MacBridge.new" "$app_dir/Contents/MacOS/MacBridge"
-cp ../file_sender.py "$app_dir/Contents/Resources/file_sender.py"
-cp ../file_receiver.py "$app_dir/Contents/Resources/file_receiver.py"
-cp ../transfer_state.py "$app_dir/Contents/Resources/transfer_state.py"
-cp ../bounded_json.py "$app_dir/Contents/Resources/bounded_json.py"
-cp ../notification_mirror.py "$app_dir/Contents/Resources/notification_mirror.py"
-cp ../certificate_store.py "$app_dir/Contents/Resources/certificate_store.py"
-cp ../resource_limits.py "$app_dir/Contents/Resources/resource_limits.py"
-cp ../identity_store.py "$app_dir/Contents/Resources/identity_store.py"
-cp ../macbridge.py "$app_dir/Contents/Resources/macbridge.py"
+# Remove only obsolete engine resources from an earlier build of this bundle.
+for resource in file_sender file_receiver transfer_state bounded_json notification_mirror certificate_store resource_limits identity_store macbridge; do
+  if [ -f "$app_dir/Contents/Resources/$resource.py" ]; then
+    unlink "$app_dir/Contents/Resources/$resource.py"
+  fi
+done
+cp "$output_dir/MacBridgeEngine" "$app_dir/Contents/MacOS/MacBridgeEngine.new"
+mv -f "$app_dir/Contents/MacOS/MacBridgeEngine.new" "$app_dir/Contents/MacOS/MacBridgeEngine"
 cp ../../assets/branding/MacBridge.icns "$app_dir/Contents/Resources/MacBridge.icns"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,9 +27,9 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>MacBridge</string>
 <key>CFBundleIconFile</key><string>MacBridge.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.0</string>
-<key>CFBundleVersion</key><string>2</string>
-<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>CFBundleShortVersionString</key><string>0.3.0</string>
+<key>CFBundleVersion</key><string>3</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>LSUIElement</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>MacBridge connects to your paired Android phone on your local network to share clipboard text and files.</string>
 <key>NSBonjourServices</key><array><string>_macbridge._tcp</string></array>
@@ -40,5 +39,6 @@ PLIST
 cp "$output_dir/MacBridgeIdentity" "$app_dir/Contents/MacOS/MacBridgeIdentity.new"
 mv -f "$app_dir/Contents/MacOS/MacBridgeIdentity.new" "$app_dir/Contents/MacOS/MacBridgeIdentity"
 codesign --force --identifier com.macbridge.companion.identity-helper --sign - "$app_dir/Contents/MacOS/MacBridgeIdentity"
+codesign --force --identifier com.macbridge.companion.engine --sign - "$app_dir/Contents/MacOS/MacBridgeEngine"
 codesign --force --sign - "$app_dir"
 printf 'Built %s\n' "$app_dir"

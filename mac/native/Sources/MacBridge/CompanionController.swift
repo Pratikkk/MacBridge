@@ -63,30 +63,24 @@ final class CompanionController: ObservableObject {
         let token = generation
         errorMessage = nil
         lastAction = "Starting companion…"
-        let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
-        guard let python = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            errorMessage = "Python 3 is required for this development version. Install it and click Restart Companion."
-            return
-        }
-        guard let script = Bundle.main.url(forResource: "macbridge", withExtension: "py") else {
-            errorMessage = "The bridge engine is missing. Rebuild the MacBridge app with build-app.sh."
+        let engine = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MacBridgeEngine")
+        guard FileManager.default.isExecutableFile(atPath: engine.path) else {
+            errorMessage = "The native bridge engine is missing. Reinstall MacBridge."
             return
         }
         let task = Process()
         let output = Pipe()
         let stdin = Pipe()
         let stderr = Pipe()
-        task.executableURL = URL(fileURLWithPath: python)
+        task.executableURL = engine
         let identityHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MacBridgeIdentity")
         guard FileManager.default.isExecutableFile(atPath: identityHelper.path) else {
             errorMessage = "The Keychain helper is missing. Reinstall MacBridge; your identity has not been changed."
             return
         }
-        task.arguments = [script.path, "--gui", "--identity-helper", identityHelper.path] + (clipboardEnabled ? ["--clipboard"] : []) + (filesEnabled ? ["--files"] : [])
+        task.arguments = ["--gui", "--identity-helper", identityHelper.path] + (clipboardEnabled ? ["--clipboard"] : []) + (filesEnabled ? ["--files"] : [])
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PYTHONUNBUFFERED"] = "1"
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         task.environment = environment
         task.standardOutput = output
         task.standardInput = stdin
@@ -109,8 +103,8 @@ final class CompanionController: ObservableObject {
                 self.connectionId = ""
                 self.pairingURI = ""
                 self.endpoint = "Companion stopped"
-                if terminated.terminationStatus != 0 {
-                    self.errorMessage = "The companion stopped. Another copy may be using port 8990, or Python/OpenSSL could not start. Close the other companion and click Restart Companion."
+                if terminated.terminationStatus != 0 && self.errorMessage == nil {
+                    self.errorMessage = "The companion stopped. Another copy may be using port 8990, or the native engine could not start. Close the other companion and click Restart Companion."
                 }
             }
         }
@@ -286,20 +280,17 @@ final class CompanionController: ObservableObject {
     func authorizeIdentity() {
         guard let account = identityAccount, identityAuthorization == nil else { return }
         let authorization = Process()
-        let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
-        guard let python = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }),
-              let script = Bundle.main.url(forResource: "macbridge", withExtension: "py") else {
-            errorMessage = "The companion runtime is missing. Reinstall MacBridge and try again."
+        let engine = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MacBridgeEngine")
+        guard FileManager.default.isExecutableFile(atPath: engine.path) else {
+            errorMessage = "The native companion engine is missing. Reinstall MacBridge and try again."
             return
         }
-        authorization.executableURL = URL(fileURLWithPath: python)
-        authorization.arguments = [script.path, "--identity-helper",
+        authorization.executableURL = engine
+        authorization.arguments = ["--identity-helper",
             Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MacBridgeIdentity").path,
             "--authorize-identity", account]
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PYTHONUNBUFFERED"] = "1"
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         authorization.environment = environment
         authorization.standardInput = FileHandle.nullDevice
         let diagnostics = Pipe()

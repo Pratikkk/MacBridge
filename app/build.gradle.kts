@@ -77,6 +77,9 @@ tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
   inputs.file(rootProject.file("mac/resource_limits.py")).withPropertyName("macBridgeResourceLimits")
   inputs.file(rootProject.file("mac/certificate_store.py")).withPropertyName("macBridgeCertificateStore")
   inputs.file(rootProject.file("mac/identity_store.py")).withPropertyName("macBridgeIdentityStore")
+  inputs.file(rootProject.file("mac/native/android_fixture.py")).withPropertyName("macBridgeNativeFixture")
+  inputs.file(rootProject.file("mac/native/.build/debug/MacBridgeEngine"))
+    .withPropertyName("macBridgeNativeEngine").optional()
 }
 
 // Some unused dependencies are commented out below instead of being removed.

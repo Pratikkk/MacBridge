@@ -2,6 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p .build/checks
+swift run MacBridgeProtocolChecks
+swift build --product MacBridgeEngine
+python3 -m unittest discover -s . -p test_engine.py -v
 swiftc Sources/MacBridge/CompanionState.swift Sources/MacBridge/PairingQR.swift Sources/MacBridge/BonjourPublisher.swift Sources/MacBridge/NotificationPresenter.swift Sources/MacBridge/LoginItem.swift \
   Tests/MacBridgeTests/CompanionTests.swift -o .build/checks/MacBridgeChecks
 .build/checks/MacBridgeChecks

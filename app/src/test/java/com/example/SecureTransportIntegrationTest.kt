@@ -21,7 +21,7 @@ import java.nio.file.Files
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/** Real SSLSocket -> Python TLS server; requires local Python 3 and OpenSSL. */
+/** Real Android SSLSocket interoperability with Python reference and native Swift engines. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class SecureTransportIntegrationTest {
@@ -168,6 +168,36 @@ class SecureTransportIntegrationTest {
         } } finally { transport.stop(); scope.cancel() }
     }
 
+    // Reuse the same Android acceptance paths with the production Swift transport.
+    private var nativeEngine = false
+    private fun useNativeEngine() {
+        org.junit.Assume.assumeTrue("Native engine requires macOS", System.getProperty("os.name").contains("Mac"))
+        nativeEngine = true
+    }
+    @Test fun `native Swift pairs reconnects and exchanges Unicode clipboard`() {
+        useNativeEngine()
+        `pair exchange unicode clipboard reconnect and reject consumed secret`()
+    }
+    @Test fun `native Swift receives resumes verifies and cancels Android files`() {
+        useNativeEngine()
+        `real TLS file transfer waits for verified delivery and cancelled partial is removed`()
+    }
+    @Test fun `native Swift delivers verified files to Android`() { useNativeEngine(); receiveMacFile(false) }
+    @Test fun `native Swift resumes sending after Android disconnects`() { useNativeEngine(); receiveMacFile(true) }
+    @Test fun `native Swift sender honors Android receiving cancellation`() { useNativeEngine(); receiveMacFile(false, cancel = true) }
+    @Test fun `native Swift notification reply round trip preserves Unicode`() {
+        useNativeEngine()
+        `reply and result round trip over authenticated TLS preserves Unicode`()
+    }
+    @Test fun `native Swift notification dismiss round trip`() {
+        useNativeEngine()
+        `dismiss request and result round trip over authenticated TLS with generation handle`()
+    }
+    @Test fun `native Swift same key renewal preserves original Android pairing code`() {
+        useNativeEngine()
+        `old pairing code and pin authenticate after same key certificate renewal`()
+    }
+
     private lateinit var peerDirectory: File
     private fun withMac(flood: Boolean = false, files: Boolean = false, sendsFile: Boolean = false, resumeFile: Boolean = false, renewed: Boolean = false, notifications: Boolean = false, dismiss: Boolean = false, reply: Boolean = false, test: (PairingCode) -> Unit) {
         val working = File(System.getProperty("user.dir"))
@@ -245,7 +275,10 @@ class SecureTransportIntegrationTest {
             print('PAIRING_URI='+peer.pairing_uri('127.0.0.1'),flush=True)
             peer.serve()
         """.trimIndent()
-        val command = if (flood) listOf("python3", "-u", "-c", floodScript, File(root, "mac").absolutePath, directory.absolutePath)
+        val nativeMode = if (renewed) "renewed" else if (reply) "reply" else if (dismiss) "dismiss" else if (notifications) "notifications" else if (resumeFile) "resume" else "normal"
+        val command = if (nativeEngine) listOf("python3", File(root, "mac/native/android_fixture.py").absolutePath,
+            root.absolutePath, directory.absolutePath, nativeMode, if (sendsFile) selected.absolutePath else "")
+            else if (flood) listOf("python3", "-u", "-c", floodScript, File(root, "mac").absolutePath, directory.absolutePath)
             else if (renewed) listOf("python3", "-u", "-c", renewalScript, File(root, "mac").absolutePath, directory.absolutePath)
             else if (notifications) listOf("python3", "-u", "-c", notificationScript, File(root, "mac").absolutePath, directory.absolutePath, if (reply) "reply" else if (dismiss) "dismiss" else "normal")
             else if (sendsFile) listOf("python3", "-u", "-c", senderScript, File(root, "mac").absolutePath, directory.absolutePath, selected.absolutePath, if (resumeFile) "resume" else "normal")

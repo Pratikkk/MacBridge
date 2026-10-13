@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import plistlib
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -28,15 +29,13 @@ def validate_bundle(bundle):
 
 
 def runtime_check():
-    candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
-    python = next((path for path in candidates if os.access(path, os.X_OK)), None)
-    if not python:
-        raise ValueError("Python 3 is required by this testing build; install Python before installing MacBridge.")
-    subprocess.run([python, "-c", "import ssl, sys; assert sys.version_info >= (3, 9)"],
-                   check=True, capture_output=True, timeout=15)
-    environment = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
-    subprocess.run(["/usr/bin/env", "openssl", "version"], env=environment,
-                   check=True, capture_output=True, timeout=15)
+    version = platform.mac_ver()[0]
+    try:
+        supported = int(version.split(".")[0]) >= 15
+    except (ValueError, IndexError):
+        supported = False
+    if not supported:
+        raise ValueError("MacBridge requires macOS 15 or later for memory-only native TLS identity storage.")
 
 
 def install(source, directory):

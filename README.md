@@ -50,13 +50,15 @@ Click the link icon in the menu bar. Existing CLI pairing records are reused. Do
 ```sh
 python3 -m unittest discover -s mac -v
 mac/native/test-app.sh
+# Build the native test engine before Android interoperability checks.
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug :app:testDebugUnitTest --offline
 ```
 
 These checks cover identity and code rejection, Unicode, bounded and malformed frames, reconnect, clipboard permission and disconnect cases, legacy phone records, desktop control recovery and shutdown, prompt status delivery, exact QR decoding, Android scan cancellation and failure recovery, duplicate-scan prevention, late-result cancellation, and identical scanned/pasted identities. After each feature, add relevant regression and edge-case checks, build, then commit and push to the configured GitHub remote as documented in [AGENTS.md](AGENTS.md).
 
 ## Remaining work
 
-The native UI still uses the tested Python TLS engine. The native Mac app now migrates its private identity into Keychain while preserving pairing. Native Swift transport and independent security assessment remain planned. The scoped repository [security review](docs/security-review.md) records fixes and open release risks. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
+The macOS 15+ app uses a native Swift engine with Apple Network, Security and CryptoKit APIs. It preserves its Keychain identity, pairing records and transfer checkpoints; Python remains a development reference/test peer. Independent security assessment remains planned. The scoped repository [security review](docs/security-review.md) records fixes and open release risks. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
 
 ## Pair by QR
 
@@ -184,3 +186,5 @@ Each reply uses its own one-use generation/identity/session handle. Android rech
 ## Android identity recovery
 
 If Android cannot access its signing identity, MacBridge shows a recovery screen instead of failing during startup. Retry preserves pairing. A confirmed lost-identity reset removes saved Macs and requires pairing again while keeping verified received files and completed history. See [recovery behavior and validation](docs/android-identity-recovery.md).
+
+See [native Swift engine behavior and validation](docs/native-engine.md) for migration, memory-only identity loading, lifecycle and interoperability checks.
