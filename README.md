@@ -58,6 +58,10 @@ These checks cover identity and code rejection, Unicode, bounded and malformed f
 
 ## Remaining work
 
+See [Release packaging and distribution](docs/release-distribution.md) for local
+ZIP/checksum packaging, the Developer ID/notarization workflow and remaining
+release acceptance checks.
+
 The macOS 15+ app uses a native Swift engine with Apple Network, Security and CryptoKit APIs. It preserves its Keychain identity, pairing records and transfer checkpoints; Python remains a development reference/test peer. Independent security assessment remains planned. The scoped repository [security review](docs/security-review.md) records fixes and open release risks. The app is a locally signed development build, not a notarized release. The Security screen reports implementation status rather than claiming full compliance.
 
 ## Pair by QR

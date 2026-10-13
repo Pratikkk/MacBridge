@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p .build/checks
+python3 -m unittest discover -s . -p test_package_release.py -v
 swift run MacBridgeProtocolChecks
 swift build --product MacBridgeEngine
 python3 -m unittest discover -s . -p test_engine.py -v
